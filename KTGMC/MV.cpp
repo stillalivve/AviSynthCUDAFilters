@@ -35,7 +35,7 @@ enum MVPlaneSet
 };
 
 enum {
-  MAX_DEGRAIN = 2,
+  MAX_DEGRAIN = 6,
   MAX_BLOCK_SIZE = 32,
 };
 
@@ -4071,10 +4071,10 @@ class KMDegrainCore : public KMDegrainCoreBase
     switch (delta) {
     case 1: return norm_weights<1>;
     case 2: return norm_weights<2>;
-      //case 3: return norm_weights<3>;
-      //case 4: return norm_weights<4>;
-      //case 5: return norm_weights<5>;
-      //case 6: return norm_weights<6>;
+    case 3: return norm_weights<3>;
+    case 4: return norm_weights<4>;
+    case 5: return norm_weights<5>;
+    case 6: return norm_weights<6>;
     }
     return nullptr;
   }
@@ -4101,10 +4101,10 @@ class KMDegrainCore : public KMDegrainCoreBase
     switch (delta) {
     case 1: return GetDegrainFunction<1>(blockWidth, blockHeight);
     case 2: return GetDegrainFunction<2>(blockWidth, blockHeight);
-      //case 3: return GetDegrainFunction<3>(blockWidth, blockHeight);
-      //case 4: return GetDegrainFunction<4>(blockWidth, blockHeight);
-      //case 5: return GetDegrainFunction<5>(blockWidth, blockHeight);
-      //case 6: return GetDegrainFunction<6>(blockWidth, blockHeight);
+    case 3: return GetDegrainFunction<3>(blockWidth, blockHeight);
+    case 4: return GetDegrainFunction<4>(blockWidth, blockHeight);
+    case 5: return GetDegrainFunction<5>(blockWidth, blockHeight);
+    case 6: return GetDegrainFunction<6>(blockWidth, blockHeight);
     }
     return nullptr;
   }
@@ -4633,6 +4633,8 @@ class KMDegrainX : public GenericVideoFilter
 public:
   KMDegrainX(PClip child, PClip super,
     PClip mvbw, PClip mvfw, PClip mvbw2, PClip mvfw2,
+    PClip mvbw3, PClip mvfw3, PClip mvbw4, PClip mvfw4,
+    PClip mvbw5, PClip mvfw5, PClip mvbw6, PClip mvfw6,
     int _thSAD, int _thSADC, int _YUVplanes, int _nLimit, int _nLimitC,
     int _nSCD1, int _nSCD2, bool _isse2, bool _planar, bool _lsb_flag,
     bool _mt_flag, int _delta, bool binomial, int useFlag, PNeoEnv env)
@@ -4647,10 +4649,13 @@ public:
     , OverWins()
     , OverWinsUV()
   {
-    rawClipB[0] = mvbw;
-    rawClipF[0] = mvfw;
-    rawClipB[1] = mvbw2;
-    rawClipF[1] = mvfw2;
+    // rawClipB/F[i] corresponds to delta = i+1; entries above _delta stay null
+    PClip mvbwAll[MAX_DEGRAIN] = { mvbw, mvbw2, mvbw3, mvbw4, mvbw5, mvbw6 };
+    PClip mvfwAll[MAX_DEGRAIN] = { mvfw, mvfw2, mvfw3, mvfw4, mvfw5, mvfw6 };
+    for (int i = 0; i < MAX_DEGRAIN; ++i) {
+      rawClipB[i] = mvbwAll[i];
+      rawClipF[i] = mvfwAll[i];
+    }
 
     KMVClip *pmvClipB[MAX_DEGRAIN];
     KMVClip *pmvClipF[MAX_DEGRAIN];
@@ -4753,7 +4758,7 @@ public:
   int __stdcall SetCacheHints(int cachehints, int frame_range) {
     if (cachehints == CACHE_GET_DEV_TYPE) {
       int devtypes = DEV_TYPE_CPU | DEV_TYPE_CUDA;
-      for (int i = 0; i < 2; ++i) {
+      for (int i = 0; i < delta; ++i) {
         if (rawClipB[i]) devtypes &= GetDeviceTypes(rawClipB[i]);
         if (rawClipF[i]) devtypes &= GetDeviceTypes(rawClipF[i]);
       }
@@ -4819,6 +4824,14 @@ public:
       args[3].AsClip(),       // mvfw
       delta >= 2 ? args[4].AsClip() : nullptr,       // mvbw2
       delta >= 2 ? args[5].AsClip() : nullptr,       // mvfw2
+      delta >= 3 ? args[6].AsClip() : nullptr,       // mvbw3
+      delta >= 3 ? args[7].AsClip() : nullptr,       // mvfw3
+      delta >= 4 ? args[8].AsClip() : nullptr,       // mvbw4
+      delta >= 4 ? args[9].AsClip() : nullptr,       // mvfw4
+      delta >= 5 ? args[10].AsClip() : nullptr,      // mvbw5
+      delta >= 5 ? args[11].AsClip() : nullptr,      // mvfw5
+      delta >= 6 ? args[12].AsClip() : nullptr,      // mvbw6
+      delta >= 6 ? args[13].AsClip() : nullptr,      // mvfw6
       thSAD,                  // thSAD
       args[5 + param_index_shift].AsInt(thSAD),   // thSAD
       YUVplanes,              // YUV planes
@@ -5384,6 +5397,22 @@ void AddFuncMV(IScriptEnvironment* env)
   env->AddFunction("KMDegrain2",
     "cccccc[thSAD]i[thSADC]i[plane]i[limit]i[limitC]i[thSCD1]i[thSCD2]i[binomial]b[useFlag]i",
     KMDegrainX::Create, (void *)2);
+
+  env->AddFunction("KMDegrain3",
+    "cccccccc[thSAD]i[thSADC]i[plane]i[limit]i[limitC]i[thSCD1]i[thSCD2]i[binomial]b[useFlag]i",
+    KMDegrainX::Create, (void *)3);
+
+  env->AddFunction("KMDegrain4",
+    "cccccccccc[thSAD]i[thSADC]i[plane]i[limit]i[limitC]i[thSCD1]i[thSCD2]i[binomial]b[useFlag]i",
+    KMDegrainX::Create, (void *)4);
+
+  env->AddFunction("KMDegrain5",
+    "cccccccccccc[thSAD]i[thSADC]i[plane]i[limit]i[limitC]i[thSCD1]i[thSCD2]i[binomial]b[useFlag]i",
+    KMDegrainX::Create, (void *)5);
+
+  env->AddFunction("KMDegrain6",
+    "cccccccccccccc[thSAD]i[thSADC]i[plane]i[limit]i[limitC]i[thSCD1]i[thSCD2]i[binomial]b[useFlag]i",
+    KMDegrainX::Create, (void *)6);
 
   env->AddFunction("KMCompensate",
     "ccc[thSAD]i[time]f[thSCD1]i[thSCD2]i",

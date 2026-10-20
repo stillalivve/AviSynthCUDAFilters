@@ -1711,8 +1711,10 @@ static __global__ void kl_prepare_degrain(
 
   __shared__ DegrainArg<pixel_t, N> s_arg_buf;
 
-  if (tx < DegrainArg<pixel_t, N>::LEN) {
-    s_arg_buf.m[tx] = parg->m[tx];
+  // DegrainArgData for N >= 4 holds more words than the 32 threads in a block row,
+  // so copy it with a stride instead of a single pass.
+  for (int i = tx; i < (int)DegrainArg<pixel_t, N>::LEN; i += blockDim.x) {
+    s_arg_buf.m[i] = parg->m[i];
   }
   __syncthreads();
 
@@ -1860,14 +1862,12 @@ static __global__ void kl_degrain_2x3(
       __syncthreads();
 
       if (M == 1 || bx < nBlkX) {
-        vint_t val = { 0 };
-        if (N == 1)
-          val = to_int(__ldg((const vpixel_t*)&info.d.pSrc[offset])) * info.d.WSrc +
-          VLoad<VLEN>::to_int(&info.d.pF[0][offsetSuper]) * info.d.WRefF[0] + VLoad<VLEN>::to_int(&info.d.pB[0][offsetSuper]) * info.d.WRefB[0];
-        else if (N == 2)
-          val = to_int(__ldg((const vpixel_t*)&info.d.pSrc[offset])) * info.d.WSrc +
-          VLoad<VLEN>::to_int(&info.d.pF[0][offsetSuper]) * info.d.WRefF[0] + VLoad<VLEN>::to_int(&info.d.pB[0][offsetSuper]) * info.d.WRefB[0] +
-          VLoad<VLEN>::to_int(&info.d.pF[1][offsetSuper]) * info.d.WRefF[1] + VLoad<VLEN>::to_int(&info.d.pB[1][offsetSuper]) * info.d.WRefB[1];
+        vint_t val = to_int(__ldg((const vpixel_t*)&info.d.pSrc[offset])) * info.d.WSrc;
+#pragma unroll
+        for (int i = 0; i < N; ++i) {
+          val += VLoad<VLEN>::to_int(&info.d.pF[i][offsetSuper]) * info.d.WRefF[i] +
+                 VLoad<VLEN>::to_int(&info.d.pB[i][offsetSuper]) * info.d.WRefB[i];
+        }
 
         int dstx = bbx * BLK_STEP4 + tx;
         int dsty = bby * BLK_STEP + ty;
@@ -2526,6 +2526,22 @@ public:
       degrainBlock = sizeof(DegrainBlock<pixel_t, 2>);
       degrainArg = sizeof(DegrainArg<pixel_t, 2>);
       break;
+    case 3:
+      degrainBlock = sizeof(DegrainBlock<pixel_t, 3>);
+      degrainArg = sizeof(DegrainArg<pixel_t, 3>);
+      break;
+    case 4:
+      degrainBlock = sizeof(DegrainBlock<pixel_t, 4>);
+      degrainArg = sizeof(DegrainArg<pixel_t, 4>);
+      break;
+    case 5:
+      degrainBlock = sizeof(DegrainBlock<pixel_t, 5>);
+      degrainArg = sizeof(DegrainArg<pixel_t, 5>);
+      break;
+    case 6:
+      degrainBlock = sizeof(DegrainBlock<pixel_t, 6>);
+      degrainArg = sizeof(DegrainArg<pixel_t, 6>);
+      break;
     default:
       env->ThrowError("Degrain: Invalid N (%d)", N);
     }
@@ -2827,6 +2843,18 @@ public:
       break;
     case 2:
       degrain = &Me::DegrainN<2>;
+      break;
+    case 3:
+      degrain = &Me::DegrainN<3>;
+      break;
+    case 4:
+      degrain = &Me::DegrainN<4>;
+      break;
+    case 5:
+      degrain = &Me::DegrainN<5>;
+      break;
+    case 6:
+      degrain = &Me::DegrainN<6>;
       break;
     default:
       env->ThrowError("[Degrain] –¢‘Î‰žN‚Å‚·");
