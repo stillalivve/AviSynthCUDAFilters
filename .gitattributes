@@ -1,0 +1,5 @@
+# Sources in this repository are authored in Shift-JIS (CP932) with CRLF line
+# endings.  Any EOL normalisation would rewrite bytes that are not ASCII and
+# can corrupt the multi-byte characters, so all conversions are disabled.
+# This also makes `git checkout` byte-identical on every platform.
+* -text
