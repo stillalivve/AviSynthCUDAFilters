@@ -359,6 +359,8 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	Sigma        = defined(Sigma)       ? Sigma : \
 	               (defined(EZDenoise)   && EZDenoise   > 0.0) ? EZDenoise : \
 	               (defined(EZKeepGrain) && EZKeepGrain > 0.0) ? 4.0 * EZKeepGrain : 2.0
+	denoiseLimit  = int(Sigma * 4)
+	denoiseLimitC = int(Sigma * 2)
 	FftThreads   = default( FftThreads, EdiThreads )
 	ChromaNoise  = default( ChromaNoise, false )
 	ShowNoise    = default( ShowNoise, 0.0 )
@@ -572,34 +574,30 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	            (InputType > 0)     ? clip : \
 	                                  clip.KTGMC_Bob( 0,1.0 )
 	fullClip  = (yuy2 && NoiseTR > 0) ? fullClip.nonyuy2clipin(true) : fullClip
-	fullSuper = (NoiseTR > 0)         ? fullClip.MSuper( pel=SubPel, levels=1, hpad=hpad, vpad=vpad, chroma=ChromaNoise ) : NOP() #TEST chroma OK?
+	# The super of the noise clip needs as many levels as the block grid allows, the CUDA
+	# analysis derives the level count from the grid and refuses a super with fewer.
+	fullSuper = (NoiseTR > 0)         ? fullClip.KMSuper( pel=SubPel, hpad=hpad, vpad=vpad, chroma=ChromaNoise ) : NOP() #TEST chroma OK?
 
-	# Create a motion compensated temporal window around current frame and use to guide denoisers
-	noiseWindow = (NoiseProcess == 0) ? NOP() : \
-	              (!DenoiseMC)        ? fullClip : \
-	              (NoiseTR == 0)      ? fullClip : \
-	              (NoiseTR == 1)      ? Interleave( fullClip.MCompensate( fullSuper, fVec1, thSCD1=ThSCD1,thSCD2=ThSCD2 ), \
-	                                                fullClip, \
-	                                                fullClip.MCompensate( fullSuper, bVec1, thSCD1=ThSCD1,thSCD2=ThSCD2 ) ) : \
-	                                    Interleave( fullClip.MCompensate( fullSuper, fVec2, thSCD1=ThSCD1,thSCD2=ThSCD2 ), \
-	                                                fullClip.MCompensate( fullSuper, fVec1, thSCD1=ThSCD1,thSCD2=ThSCD2 ), \
-	                                                fullClip, \
-	                                                fullClip.MCompensate( fullSuper, bVec1, thSCD1=ThSCD1,thSCD2=ThSCD2 ), \
-	                                                fullClip.MCompensate( fullSuper, bVec2, thSCD1=ThSCD1,thSCD2=ThSCD2 ) )
-	noiseWindow = yuy2 && (Denoiser == "fft3df") && NoiseTR > 0 ? noiseWindow.nonyuy2clipout(true) : noiseWindow
-	dnWindow = (NoiseProcess == 0)      ? NOP() : \
-	           (Denoiser == "dfttest")  ? noiseWindow.dfttest( Y=true, U=ChromaNoise, V=ChromaNoise, sigma=Sigma*4, tbsize=noiseTD, threads=FftThreads, Dither=DftDither, lsb=lsbd ) : \
-	        (Denoiser == "KNLMeansCL")  ? noiseWindow.SMDegrain_KNLMeansCL(Chroma=ChromaNoise, lsb=lsbd, a=2, d=NoiseTR, h=Sigma, device_type="GPU" ) : \
-	                                      noiseWindow.FFT3DFilter( plane=(ChromaNoise ? 4 : 0), sigma=Sigma, bt=noiseTD, ncpu=FftThreads )
-	dnwindow = (Denoiser == "KNLMeansCL" || Denoiser == "dfttest") && (NoiseProcess != 0) && lsbd ? dnWindow.ditherpost(mode=6, U=ChromaNoise?3:2, V=ChromaNoise?3:2, slice=false) : dnWindow
-	dnwindow = (Denoiser == "KNLMeansCL" || Denoiser == "dfttest") && (NoiseProcess != 0) && yuy2 ? dnWindow.nonyuy2clipout(true) : dnWindow
+	# The denoiser is a motion compensated temporal average with a limit, so that it takes the
+	# noise away but keeps the detail.  Its motion vectors have to be computed on the super of
+	# the clip that gets denoised, they can not be reused from the search clip because that
+	# one has a different size and therefore a different block grid.
+	noiseVecB1  = (NoiseTR > 0) ? fullSuper.KMAnalyse( blksize=BlockSize, overlap=Overlap, search=Search, isb=true,  chroma=ChromaNoise, delta=1, lambda=Lambda, lsad=LSAD, global=GlobalMotion, plevel=PLevel, pnew=PNew, meander=false, batch=analyzeBatch ) : NOP()
+	noiseVecF1  = (NoiseTR > 0) ? fullSuper.KMAnalyse( blksize=BlockSize, overlap=Overlap, search=Search, isb=false, chroma=ChromaNoise, delta=1, lambda=Lambda, lsad=LSAD, global=GlobalMotion, plevel=PLevel, pnew=PNew, meander=false, batch=analyzeBatch ) : NOP()
+	noiseVecB2  = (NoiseTR > 1) ? fullSuper.KMAnalyse( blksize=BlockSize, overlap=Overlap, search=Search, isb=true,  chroma=ChromaNoise, delta=2, lambda=Lambda, lsad=LSAD, global=GlobalMotion, plevel=PLevel, pnew=PNew, meander=false, batch=analyzeBatch ) : NOP()
+	noiseVecF2  = (NoiseTR > 1) ? fullSuper.KMAnalyse( blksize=BlockSize, overlap=Overlap, search=Search, isb=false, chroma=ChromaNoise, delta=2, lambda=Lambda, lsad=LSAD, global=GlobalMotion, plevel=PLevel, pnew=PNew, meander=false, batch=analyzeBatch ) : NOP()
 
-	# Rework denoised clip to match source format - various code paths here: discard the motion compensation window, discard doubled lines (from point resize)
+	dnWindow = (NoiseProcess == 0) ? NOP() : \
+	           (!DenoiseMC)        ? fullClip : \
+	           (NoiseTR == 0)      ? fullClip : \
+	           (NoiseTR == 1)      ? fullClip.KMDegrain1( fullSuper, noiseVecB1, noiseVecF1, thSAD=ThSAD1, limit=denoiseLimit, limitC=denoiseLimitC, thSCD1=ThSCD1, thSCD2=ThSCD2, binomial=False ) : \
+	                                fullClip.KMDegrain2( fullSuper, noiseVecB1, noiseVecF1, noiseVecB2, noiseVecF2, thSAD=ThSAD1, limit=denoiseLimit, limitC=denoiseLimitC, thSCD1=ThSCD1, thSCD2=ThSCD2, binomial=False )
+
+	# Rework denoised clip to match source format - discard doubled lines (from point resize)
 	# Also reweave to get interlaced noise if source was interlaced (could keep the full frame of noise, but it will be poor quality from the point resize)
 	denoised = (NoiseProcess == 0) ? NOP() : \
-	           (!DenoiseMC)        ? ((InputType > 0) ? dnWindow : dnWindow.SeparateFields().SelectEvery( 4, 0,3 ).Weave()) : \
-	           (InputType > 0)     ? ((NoiseTR == 0)  ? dnWindow : dnWindow.SelectEvery( noiseTD, NoiseTR )) : \
-	                                 dnWindow.SeparateFields().SelectEvery( noiseTD*4, NoiseTR*2,NoiseTR*6+3 ).Weave()
+	           (InputType > 0)     ? dnWindow : \
+	                                 dnWindow.SeparateFields().SelectEvery( 4, 0,3 ).KWeave()
 
 	# >>>> Switch to planar YUY2 for noise bypass
 
@@ -614,10 +612,10 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	             (InputType != 0)                           ? noise : \
 	             (NoiseDeint == "Bob")                      ? noise.KTGMC_Bob( 0,0.5 ) : \
 	             (NoiseDeint == "Generate")                 ? noise.KTGMC_Generate2ndFieldNoise( denoised, ChromaNoise ) : \
-	                                                          noise.DoubleWeave()
+	                                                          noise.KDoubleWeave()
 	# Motion-compensated stabilization of generated noise
-	noiseSuper = (StabilizeNoise) ? deintNoise.MSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad, chroma=ChromaNoise ) : NOP()
-	mcNoise    = (StabilizeNoise) ? deintNoise.MCompensate( noiseSuper, bVec1, thSCD1=ThSCD1,thSCD2=ThSCD2 ) : NOP()
+	noiseSuper = (StabilizeNoise) ? deintNoise.KMSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad, chroma=ChromaNoise ) : NOP()
+	mcNoise    = (StabilizeNoise) ? deintNoise.KMCompensate( noiseSuper, bVec1, thSCD1=ThSCD1,thSCD2=ThSCD2 ) : NOP()
 	finalNoise = (StabilizeNoise) ? kmt_lutxy( deintNoise, mcNoise, "x range_half - abs y range_half - abs > x y ? 0.6 * x y + 0.2 * +", U=CNmt1,V=CNmt1 ) : deintNoise
 
 	# If NoiseProcess=1 denoise input clip. If NoiseProcess=2 leave noise in the clip and let the temporal blurs "denoise" it for a stronger effect
