@@ -611,7 +611,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	deintNoise = (NoiseProcess == 0 || totalRestore == 0.0) ? NOP() : \
 	             (InputType != 0)                           ? noise : \
 	             (NoiseDeint == "Bob")                      ? noise.KTGMC_Bob( 0,0.5 ) : \
-	             (NoiseDeint == "Generate")                 ? noise.KTGMC_Generate2ndFieldNoise( denoised, ChromaNoise ) : \
+	             (NoiseDeint == "Generate")                 ? noise.KTGMC_Generate2ndFieldNoise( denoised, ChromaNoise, dev ) : \
 	                                                          noise.KDoubleWeave()
 	# Motion-compensated stabilization of generated noise
 	noiseSuper = (StabilizeNoise) ? deintNoise.KMSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad, chroma=ChromaNoise ) : NOP()
@@ -954,19 +954,22 @@ function KTGMC_KeepOnlyBobShimmerFixes( clip Input, clip Ref, int Rep, bool Chro
 # Given noise extracted from an interlaced source (i.e. the noise is interlaced), generate "progressive" noise with a new "field" of noise injected. The new
 # noise is centered on a weighted local average and uses the difference between local min & max as an estimate of local variance
 # YUY2 clip input is planar, but must pass interleaved version of clip to setup noise
-function KTGMC_Generate2ndFieldNoise( clip Input, clip InterleavedClip, bool "ChromaNoise" )
+function KTGMC_Generate2ndFieldNoise( clip Input, clip InterleavedClip, bool "ChromaNoise", int "dev" )
 {
 	# >>>> YUY2 is planar here. Noise is generated (AddGrainC) interleaved, but immediately made planar
 	ChromaNoise = default( ChromaNoise, false )
+	dev         = default( dev, 0 )
 	CNmt1 = ChromaNoise ? 3 : 1
 	origNoise = Input.SeparateFields()
-	noiseMax  = origNoise.mt_expand( mode="square", U=CNmt1,V=CNmt1 ).mt_expand( mode="horizontal", U=CNmt1,V=CNmt1 )
-	noiseMin  = origNoise.mt_inpand( mode="square", U=CNmt1,V=CNmt1 ).mt_inpand( mode="horizontal", U=CNmt1,V=CNmt1 )
+	noiseMax  = origNoise.KExpandVerticalX2( U=CNmt1,V=CNmt1 ).KExpandHorizontalX2( U=CNmt1,V=CNmt1 ).KExpandHorizontalX2( U=CNmt1,V=CNmt1 )
+	noiseMin  = origNoise.KInpandVerticalX2( U=CNmt1,V=CNmt1 ).KInpandHorizontalX2( U=CNmt1,V=CNmt1 ).KInpandHorizontalX2( U=CNmt1,V=CNmt1 )
 	random    = BlankClip( InterleavedClip.SeparateFields(), color_yuv=$808080 ).AddGrainC( var=1800, uvar=ChromaNoise ? 1800 : 0 )
+	# AddGrainC is a CPU only plugin, so the random pattern has to be moved to the GPU afterwards
+	random    = random.OnCPU(0).OnCUDA(2, dev)
 	random    = InterleavedClip.IsYUY2() ? random.nonyuy2clipin(true) : random
-	varRandom = mt_makediff( noiseMax, noiseMin, U=CNmt1,V=CNmt1 ).mt_lutxy( random, "clamp_f_i8 x range_half - y * range_size / range_half +", U=CNmt1,V=CNmt1)
-	newNoise  = noiseMin.mt_adddiff( varRandom, U=CNmt1,V=CNmt1 )
-	return Interleave( origNoise, newNoise ).Weave()
+	varRandom = KMakeDiff( noiseMax, noiseMin, u=CNmt1,v=CNmt1 ).kmt_lutxy( random, "clamp_f_i8 x range_half - y * range_size / range_half +", U=CNmt1,V=CNmt1 )
+	newNoise  = noiseMin.KAddDiff( varRandom, u=CNmt1,v=CNmt1 )
+	return Interleave( origNoise, newNoise ).KWeave()
 }
 
 

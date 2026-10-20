@@ -3606,6 +3606,74 @@ public:
       env);
   }
 };
+// ---------------------------------------------------------------------------
+// Horizontal counterpart of KExpandVerticalX2 / KInpandVerticalX2.  The masktools
+// mt_expand and mt_inpand work on a 3x3 square or on one direction, and the
+// script uses the horizontal and the square variant to build the noise that is
+// added back to the picture.
+// ---------------------------------------------------------------------------
+template <typename pixel_t, bool EXPAND>
+__global__ void kl_box5_h(
+  pixel_t* dst, const pixel_t* src, int width, int height, int pitch)
+{
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (x < width && y < height) {
+    pixel_t m = src[x + y * pitch];
+    for (int i = 1; i <= 2; ++i) {
+      pixel_t a = src[max(x - i, 0) + y * pitch];
+      pixel_t b = src[min(x + i, width - 1) + y * pitch];
+      m = EXPAND ? max(m, max(a, b)) : min(m, min(a, b));
+    }
+    dst[x + y * pitch] = m;
+  }
+}
+
+template <bool EXPAND>
+class KXpandHorizontalX2 : public KMasktoolFilterBase
+{
+protected:
+  virtual void ProcPlane(int p, uint8_t* pDst,
+    const uint8_t* pSrc0, const uint8_t* pSrc1, const uint8_t* pSrc2, const uint8_t* pSrc3,
+    int width, int height, int pitch, PNeoEnv env) override
+  {
+    ProcPlane_(pDst, pSrc0, width, height, pitch, env);
+  }
+
+  virtual void ProcPlane(int p, uint16_t* pDst,
+    const uint16_t* pSrc0, const uint16_t* pSrc1, const uint16_t* pSrc2, const uint16_t* pSrc3,
+    int width, int height, int pitch, PNeoEnv env) override
+  {
+    ProcPlane_(pDst, pSrc0, width, height, pitch, env);
+  }
+
+  template <typename pixel_t>
+  void ProcPlane_(pixel_t* pDst, const pixel_t* pSrc0, int width, int height, int pitch, PNeoEnv env) {
+    cudaStream_t stream = static_cast<cudaStream_t>(env->GetDeviceStream());
+
+    dim3 threads(32, 16);
+    dim3 blocks(nblocks(width, threads.x), nblocks(height, threads.y));
+
+    kl_box5_h<pixel_t, EXPAND><<<blocks, threads, 0, stream>>>(
+      pDst, pSrc0, width, height, pitch);
+    DEBUG_SYNC;
+  }
+
+public:
+  KXpandHorizontalX2(PClip src0, int y, int u, int v, IScriptEnvironment* env_)
+    : KMasktoolFilterBase(src0, y, u, v, env_)
+  { }
+
+  static AVSValue __cdecl Create(AVSValue args, void* user_data, IScriptEnvironment* env) {
+    return new KXpandHorizontalX2<EXPAND>(
+      args[0].AsClip(),
+      args[1].AsInt(3),
+      args[2].AsInt(1),
+      args[3].AsInt(1),
+      env);
+  }
+};
 void AddFuncKernel(IScriptEnvironment* env)
 {
   env->AddFunction("KTGMC_Bob", "c[b]f[c]f", KTGMC_Bob::Create, 0);
@@ -3618,6 +3686,8 @@ void AddFuncKernel(IScriptEnvironment* env)
   env->AddFunction("KGaussResize", "c[p]f[chroma]b", KGaussResize::Create, 0);
 
   env->AddFunction("KInpandVerticalX2", "c[y]i[u]i[v]i", KXpandVerticalX2<Min5>::Create, 0);
+  env->AddFunction("KInpandHorizontalX2", "c[y]i[u]i[v]i", KXpandHorizontalX2<false>::Create, 0);
+  env->AddFunction("KExpandHorizontalX2", "c[y]i[u]i[v]i", KXpandHorizontalX2<true>::Create, 0);
   env->AddFunction("KExpandVerticalX2", "c[y]i[u]i[v]i", KXpandVerticalX2<Max5>::Create, 0);
 
   env->AddFunction("KMakeDiff", "cc[y]i[u]i[v]i", KMakeDiff<MakeDiffOp>::Create, 0);
