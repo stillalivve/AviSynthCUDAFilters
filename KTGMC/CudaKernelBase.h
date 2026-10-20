@@ -25,7 +25,12 @@ public:
 #ifndef NDEBUG
     cudaPointerAttributes attr;
     CUDA_CHECK(cudaPointerGetAttributes(&attr, ptr));
+#if CUDART_VERSION >= 11020
+    // cudaPointerAttributes::memoryType was deprecated in CUDA 11.2 and removed in 12.0
+    if (attr.type != cudaMemoryTypeDevice) {
+#else
     if (attr.memoryType != cudaMemoryTypeDevice) {
+#endif
       env->ThrowError("[CUDA Error] Not valid devicce pointer");
     }
 #endif
