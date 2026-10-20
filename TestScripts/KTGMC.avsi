@@ -729,9 +729,9 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	stable  = (TR2 == 0) ? addNoise1 : \
 	          (TR2 == 1) ? addNoise1.KMDegrain1( stableSuper, bVec1,fVec1,                                                     thSAD=ThSAD2, thSCD1=ThSCD1,thSCD2=ThSCD2, useFlag=useFlag ) : \
 	          (TR2 == 2) ? addNoise1.KMDegrain2( stableSuper, bVec1,fVec1, bVec2,fVec2,                                        thSAD=ThSAD2, thSCD1=ThSCD1,thSCD2=ThSCD2, useFlag=useFlag ) : \
- 	          (TR2 == 3) ? addNoise1.MDegrain3( stableSuper, bVec1,fVec1, bVec2,fVec2, bVec3,fVec3,                           thSAD=ThSAD2, thSCD1=ThSCD1,thSCD2=ThSCD2, lsb=lsb ) : \
- 	          (TR2 == 4) ? addNoise1.MDegrain4( stableSuper, bVec1,fVec1, bVec2,fVec2, bVec3,fVec3, bVec4,fVec4,              thSAD=ThSAD2, thSCD1=ThSCD1,thSCD2=ThSCD2, lsb=lsb ) : \
- 	                       addNoise1.MDegrain5( stableSuper, bVec1,fVec1, bVec2,fVec2, bVec3,fVec3, bVec4,fVec4, bVec5,fVec5, thSAD=ThSAD2, thSCD1=ThSCD1,thSCD2=ThSCD2, lsb=lsb )
+ 	          (TR2 == 3) ? addNoise1.KMDegrain3( stableSuper, bVec1,fVec1, bVec2,fVec2, bVec3,fVec3,                           thSAD=ThSAD2, thSCD1=ThSCD1,thSCD2=ThSCD2, useFlag=useFlag ) : \
+ 	          (TR2 == 4) ? addNoise1.KMDegrain4( stableSuper, bVec1,fVec1, bVec2,fVec2, bVec3,fVec3, bVec4,fVec4,              thSAD=ThSAD2, thSCD1=ThSCD1,thSCD2=ThSCD2, useFlag=useFlag ) : \
+ 	                       addNoise1.KMDegrain5( stableSuper, bVec1,fVec1, bVec2,fVec2, bVec3,fVec3, bVec4,fVec4, bVec5,fVec5, thSAD=ThSAD2, thSCD1=ThSCD1,thSCD2=ThSCD2, useFlag=useFlag )
 	stable  = (TR2 > 0) && lsb ? stable.ditherpost(mode=6, slice=false) : stable
 
 	# Remove areas of difference between final output & basic interpolated image that are not bob-shimmer fixes: repairs motion blur caused by temporal smooth
