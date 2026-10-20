@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <vector>
 
 #include <cuda_runtime_api.h>
 #include <cuda_device_runtime_api.h>
@@ -1034,7 +1035,7 @@ class KRemoveGrain : public CUDAFilterBase {
 
     for (int p = 0; p < 3; ++p) {
       int mode = modes[p];
-      if (mode == -1) continue;
+      if (mode == -1) mode = 0; // RgTools: -1 leaves the plane at the source value
 
       const pixel_t* pSrc = reinterpret_cast<const pixel_t*>(src->GetReadPtr(planes[p]));
       pixel_t* pDst = reinterpret_cast<pixel_t*>(dst->GetWritePtr(planes[p]));
@@ -1180,6 +1181,41 @@ public:
   }
 };
 
+// global minimum / maximum of a plane, used by the Repair mode 12
+__global__ void kl_repair_minmax_init(int* mm, int hi, int lo)
+{
+  mm[0] = hi;
+  mm[1] = lo;
+}
+
+template <typename pixel_t>
+__global__ void kl_repair_minmax_reduce(const pixel_t* src, int width, int height, int pitch, int* mm)
+{
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (x < width && y < height) {
+    int v = (int)src[x + y * pitch];
+    atomicMin(&mm[0], v);
+    atomicMax(&mm[1], v);
+  }
+}
+
+template <typename pixel_t>
+__global__ void kl_repair_clamp_range(pixel_t* dst, const pixel_t* src, const int* mm, int width, int height, int pitch)
+{
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (x < width && y < height) {
+    int v = (int)src[x + y * pitch];
+    int lo = mm[0];
+    int hi = mm[1];
+    v = v < lo ? lo : v;
+    v = v > hi ? hi : v;
+    dst[x + y * pitch] = (pixel_t)v;
+  }
+}
 class KRepair : public CUDAFilterBase {
 
   PClip refclip;
@@ -1206,7 +1242,7 @@ class KRepair : public CUDAFilterBase {
 
     for (int p = 0; p < 3; ++p) {
       int mode = modes[p];
-      if (mode == -1) continue;
+      if (mode == -1) mode = 0; // RgTools: -1 leaves the plane at the source value
 
       const pixel_t* pSrc = reinterpret_cast<const pixel_t*>(src->GetReadPtr(planes[p]));
       const pixel_t* pRef = reinterpret_cast<const pixel_t*>(ref->GetReadPtr(planes[p]));
@@ -1259,6 +1295,28 @@ class KRepair : public CUDAFilterBase {
           << <blocks, threads, 0, stream >> > (pDst + pitch + 1, pSrc + pitch + 1, pRef + pitch + 1, width - 2, height - 2, pitch);
         DEBUG_SYNC;
         break;
+        case 12: {
+          // Clips the source pixel to the global range of the reference clip.
+          VideoInfo mmvi = VideoInfo();
+          mmvi.pixel_type = VideoInfo::CS_BGR32;
+          mmvi.width = 2;
+          mmvi.height = 1;
+          PVideoFrame mmFrame = env->NewVideoFrame(mmvi);
+          int* mm = reinterpret_cast<int*>(mmFrame->GetWritePtr());
+
+          int bits = vi.BitsPerComponent();
+          int hi = (1 << bits) - 1;
+
+          kl_repair_minmax_init<<<1, 2, 0, stream>>>(mm, hi, 0);
+          DEBUG_SYNC;
+          kl_repair_minmax_reduce<pixel_t><<<blocks, threads, 0, stream>>>(
+            pRef, width, height, pitch, mm);
+          DEBUG_SYNC;
+          kl_repair_clamp_range<pixel_t><<<blocks, threads, 0, stream>>>(
+            pDst, pSrc, mm, width, height, pitch);
+          DEBUG_SYNC;
+          break;
+        }
 
       default:
         env->ThrowError("[KRepair] Unsupported mode %d", modes[p]);
@@ -1297,6 +1355,7 @@ public:
       case 2:
       case 3:
       case 4:
+      case 12:
         break;
       default:
         env->ThrowError("[KRepair] Unsupported mode %d", modes[p]);
@@ -1378,7 +1437,7 @@ class KVerticalCleaner : public CUDAFilterBase {
 
     for (int p = 0; p < 3; ++p) {
       int mode = modes[p];
-      if (mode == -1) continue;
+      if (mode == -1) mode = 0; // RgTools: -1 leaves the plane at the source value
 
       const pixel_t* pSrc = reinterpret_cast<const pixel_t*>(src->GetReadPtr(planes[p]));
       pixel_t* pDst = reinterpret_cast<pixel_t*>(dst->GetWritePtr(planes[p]));
@@ -1444,6 +1503,7 @@ public:
     int modes[] = { mode, modeU, modeV };
     for (int p = 0; p < 3; ++p) {
       switch (modes[p]) {
+      case -1:
       case 0:
       case 1:
         break;
@@ -1669,7 +1729,7 @@ protected:
 
     for (int p = 0; p < 3; ++p) {
       int mode = modes[p];
-      if (mode == 1) continue;
+      if (mode == 1) mode = 0; // RgTools: 1 leaves the plane at the source value
 
       const pixel_t* pSrc0 = reinterpret_cast<const pixel_t*>(src0->GetReadPtr(planes[p]));
       const pixel_t* pSrc1 = (numChilds >= 2) ? reinterpret_cast<const pixel_t*>(src1->GetReadPtr(planes[p])) : nullptr;
@@ -1696,7 +1756,7 @@ protected:
         continue;
       }
 
-      switch (modes[p]) {
+      switch (mode) {
       case 2:
         launch_elementwise<vpixel_t, vpixel_t, CopyFunction<vpixel_t>>(
           (vpixel_t*)pDst, (const vpixel_t*)pSrc0, width4, height, pitch4, stream);
@@ -3290,6 +3350,262 @@ public:
   }
 };
 
+// ---------------------------------------------------------------------------
+// KClamp: clip the source between an upper and a lower limit, with an optional
+// overshoot / undershoot.  This is the CUDA version of the masktools mt_clamp.
+// ---------------------------------------------------------------------------
+template <typename pixel_t>
+__global__ void kl_clamp(
+  pixel_t* dst, const pixel_t* src, const pixel_t* upper, const pixel_t* lower,
+  int width, int height, int pitch, int overshoot, int undershoot)
+{
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (x < width && y < height) {
+    int v = (int)src[x + y * pitch];
+    int hi = (int)upper[x + y * pitch] + overshoot;
+    int lo = (int)lower[x + y * pitch] - undershoot;
+    v = v > hi ? hi : v;
+    v = v < lo ? lo : v;
+    dst[x + y * pitch] = (pixel_t)v;
+  }
+}
+
+class KClamp : public KMasktoolFilterBase
+{
+  int overshoot;
+  int undershoot;
+
+  template <typename pixel_t>
+  void ProcPlane_(pixel_t* pDst,
+    const pixel_t* pSrc0, const pixel_t* pSrc1, const pixel_t* pSrc2,
+    int width, int height, int pitch, PNeoEnv env)
+  {
+    cudaStream_t stream = static_cast<cudaStream_t>(env->GetDeviceStream());
+
+    dim3 threads(32, 16);
+    dim3 blocks(nblocks(width, threads.x), nblocks(height, threads.y));
+
+    kl_clamp<pixel_t><<<blocks, threads, 0, stream>>>(
+      pDst, pSrc0, pSrc1, pSrc2, width, height, pitch, overshoot, undershoot);
+    DEBUG_SYNC;
+  }
+
+protected:
+  virtual void ProcPlane(int p, uint8_t* pDst,
+    const uint8_t* pSrc0, const uint8_t* pSrc1, const uint8_t* pSrc2, const uint8_t* pSrc3,
+    int width, int height, int pitch, PNeoEnv env) override
+  {
+    ProcPlane_(pDst, pSrc0, pSrc1, pSrc2, width, height, pitch, env);
+  }
+
+  virtual void ProcPlane(int p, uint16_t* pDst,
+    const uint16_t* pSrc0, const uint16_t* pSrc1, const uint16_t* pSrc2, const uint16_t* pSrc3,
+    int width, int height, int pitch, PNeoEnv env) override
+  {
+    ProcPlane_(pDst, pSrc0, pSrc1, pSrc2, width, height, pitch, env);
+  }
+
+public:
+  KClamp(PClip src, PClip upper, PClip lower, int overshoot, int undershoot,
+         int Y, int U, int V, IScriptEnvironment* env_)
+    : KMasktoolFilterBase(src, upper, lower, Y, U, V, env_)
+    , overshoot(overshoot)
+    , undershoot(undershoot)
+  { }
+
+  static AVSValue __cdecl Create(AVSValue args, void* user_data, IScriptEnvironment* env) {
+    return new KClamp(
+      args[0].AsClip(),
+      args[1].AsClip(),
+      args[2].AsClip(),
+      args[3].AsInt(0),
+      args[4].AsInt(0),
+      args[5].AsInt(3),
+      args[6].AsInt(1),
+      args[7].AsInt(1),
+      env);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// KBlur: separable binomial blur, the CUDA version of the RgTools Blur.
+// The radius is given per direction, 0 disables that direction.
+// ---------------------------------------------------------------------------
+template <typename pixel_t>
+__global__ void kl_blur_h(
+  pixel_t* dst, const pixel_t* src, int width, int height, int pitch,
+  const int* kernel, int radius)
+{
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (x < width && y < height) {
+    int sum = 0;
+    int wsum = 0;
+    for (int i = -radius; i <= radius; ++i) {
+      int sx = min(max(x + i, 0), width - 1);
+      int w = kernel[i + radius];
+      sum += w * (int)src[sx + y * pitch];
+      wsum += w;
+    }
+    dst[x + y * pitch] = (pixel_t)((sum + wsum / 2) / wsum);
+  }
+}
+
+template <typename pixel_t>
+__global__ void kl_blur_v(
+  pixel_t* dst, const pixel_t* src, int width, int height, int pitch,
+  const int* kernel, int radius)
+{
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (x < width && y < height) {
+    int sum = 0;
+    int wsum = 0;
+    for (int i = -radius; i <= radius; ++i) {
+      int sy = min(max(y + i, 0), height - 1);
+      int w = kernel[i + radius];
+      sum += w * (int)src[x + sy * pitch];
+      wsum += w;
+    }
+    dst[x + y * pitch] = (pixel_t)((sum + wsum / 2) / wsum);
+  }
+}
+
+class KBlur : public CUDAFilterBase
+{
+  int radiusH;
+  int radiusV;
+  int logUVx;
+  int logUVy;
+  std::unique_ptr<DeviceLocalData<int>> kernelH;
+  std::unique_ptr<DeviceLocalData<int>> kernelV;
+
+  static std::vector<int> BinomialKernel(int radius) {
+    // binomial coefficients of order 2 * radius
+    std::vector<int> k(2 * radius + 1, 1);
+    for (int order = 1; order <= 2 * radius; ++order) {
+      std::vector<int> next(k.size() + 1, 0);
+      for (size_t i = 0; i < k.size(); ++i) {
+        next[i] += k[i];
+        next[i + 1] += k[i];
+      }
+      k.swap(next);
+    }
+    return k;
+  }
+
+  template <typename pixel_t>
+  PVideoFrame Proc(int n, PNeoEnv env) {
+    cudaStream_t stream = static_cast<cudaStream_t>(env->GetDeviceStream());
+
+    PVideoFrame src = child->GetFrame(n, env);
+    PVideoFrame dst = env->NewVideoFrame(vi);
+    PVideoFrame tmp = (radiusH > 0 && radiusV > 0) ? env->NewVideoFrame(vi) : PVideoFrame();
+
+    const int* pKernelH = kernelH ? kernelH->GetData(env) : nullptr;
+    const int* pKernelV = kernelV ? kernelV->GetData(env) : nullptr;
+
+    int planes[] = { PLANAR_Y, PLANAR_U, PLANAR_V };
+
+    for (int p = 0; p < 3; ++p) {
+      const pixel_t* pSrc = reinterpret_cast<const pixel_t*>(src->GetReadPtr(planes[p]));
+      pixel_t* pDst = reinterpret_cast<pixel_t*>(dst->GetWritePtr(planes[p]));
+
+      int pitch = src->GetPitch(planes[p]) / sizeof(pixel_t);
+      int width = vi.width;
+      int height = vi.height;
+
+      if (p > 0) {
+        width >>= logUVx;
+        height >>= logUVy;
+      }
+
+      dim3 threads(32, 16);
+      dim3 blocks(nblocks(width, threads.x), nblocks(height, threads.y));
+
+      if (radiusH > 0) {
+        const pixel_t* pIn = pSrc;
+        pixel_t* pOut = (radiusV > 0)
+          ? reinterpret_cast<pixel_t*>(tmp->GetWritePtr(planes[p]))
+          : pDst;
+        kl_blur_h<pixel_t><<<blocks, threads, 0, stream>>>(
+          pOut, pIn, width, height, pitch, pKernelH, radiusH);
+        DEBUG_SYNC;
+        if (radiusV > 0) {
+          const pixel_t* pTmp = reinterpret_cast<const pixel_t*>(tmp->GetReadPtr(planes[p]));
+          kl_blur_v<pixel_t><<<blocks, threads, 0, stream>>>(
+            pDst, pTmp, width, height, pitch, pKernelV, radiusV);
+          DEBUG_SYNC;
+        }
+      }
+      else if (radiusV > 0) {
+        kl_blur_v<pixel_t><<<blocks, threads, 0, stream>>>(
+          pDst, pSrc, width, height, pitch, pKernelV, radiusV);
+        DEBUG_SYNC;
+      }
+      else {
+        launch_elementwise<pixel_t, pixel_t, CopyFunction<pixel_t>>(
+          pDst, pSrc, width, height, pitch, stream);
+        DEBUG_SYNC;
+      }
+    }
+
+    return dst;
+  }
+
+public:
+  KBlur(PClip child, int radiusH, int radiusV, IScriptEnvironment* env_)
+    : CUDAFilterBase(child)
+    , radiusH(radiusH)
+    , radiusV(radiusV)
+    , logUVx(vi.GetPlaneWidthSubsampling(PLANAR_U))
+    , logUVy(vi.GetPlaneHeightSubsampling(PLANAR_U))
+  {
+    if (radiusH < 0 || radiusV < 0 || radiusH > 8 || radiusV > 8) {
+      env_->ThrowError("[KBlur] radius must be between 0 and 8");
+      return;
+    }
+    if (radiusH > 0) {
+      std::vector<int> k = BinomialKernel(radiusH);
+      kernelH = std::unique_ptr<DeviceLocalData<int>>(
+        new DeviceLocalData<int>(k.data(), (int)k.size(), env_));
+    }
+    if (radiusV > 0) {
+      std::vector<int> k = BinomialKernel(radiusV);
+      kernelV = std::unique_ptr<DeviceLocalData<int>>(
+        new DeviceLocalData<int>(k.data(), (int)k.size(), env_));
+    }
+  }
+
+  PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env_) {
+    PNeoEnv env = env_;
+    if (!IS_CUDA) {
+      env->ThrowError("[KBlur] CUDA frames only");
+    }
+    int pixelSize = vi.ComponentSize();
+    switch (pixelSize) {
+    case 1:
+      return Proc<uint8_t>(n, env);
+    case 2:
+      return Proc<uint16_t>(n, env);
+    default:
+      env->ThrowError("[KBlur] Unsupported pixel format");
+    }
+    return PVideoFrame();
+  }
+
+  static AVSValue __cdecl Create(AVSValue args, void* user_data, IScriptEnvironment* env) {
+    return new KBlur(
+      args[0].AsClip(),
+      args[1].AsInt(0),
+      args[2].AsInt(0),
+      env);
+  }
+};
 void AddFuncKernel(IScriptEnvironment* env)
 {
   env->AddFunction("KTGMC_Bob", "c[b]f[c]f", KTGMC_Bob::Create, 0);
@@ -3297,6 +3613,8 @@ void AddFuncKernel(IScriptEnvironment* env)
   env->AddFunction("KRemoveGrain", "c[mode]i[modeU]i[modeV]i", KRemoveGrain::Create, 0);
   env->AddFunction("KRepair", "cc[mode]i[modeU]i[modeV]i", KRepair::Create, 0);
   env->AddFunction("KVerticalCleaner", "c[mode]i[modeU]i[modeV]i", KVerticalCleaner::Create, 0);
+  env->AddFunction("KClamp", "ccc[overshoot]i[undershoot]i[y]i[u]i[v]i", KClamp::Create, 0);
+  env->AddFunction("KBlur", "c[horizontal]i[vertical]i", KBlur::Create, 0);
   env->AddFunction("KGaussResize", "c[p]f[chroma]b", KGaussResize::Create, 0);
 
   env->AddFunction("KInpandVerticalX2", "c[y]i[u]i[v]i", KXpandVerticalX2<Min5>::Create, 0);

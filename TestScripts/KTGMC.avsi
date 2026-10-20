@@ -450,7 +450,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	# Bob the input as a starting point for motion search clip
 	bobbed = (InputType == 0) ? useEdiExt ? isyuy2(EdiExt) ? EdiExt.nonyuy2clipin(true) : EdiExt : planarClip.KTGMC_Bob( 0,0.5 ) : \
 	         (InputType == 1) ? planarClip : \
-	                            planarClip.Blur( 0,1 )
+	                            planarClip.KBlur( 0, 1 )
 
 	# If required, get any existing global clips with a matching "GlobalNames" setting. Unmatched values get NOP (= 0)
 	srchClip  = KTGMC_GetUserGlobal( GlobalNames, "srchClip",  ReuseGlobals )
@@ -485,7 +485,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	# Blur image and soften edges to assist in motion matching of edge blocks. Blocks are matched by SAD (sum of absolute differences between blocks), but even
 	# a slight change in an edge from frame to frame will give a high SAD due to the higher contrast of edges
 	spatialBlur = (IsClip(srchClip) || SrchClipPP == 0) ? NOP() : \
-	              (SrchClipPP == 1) ? repair0.BilinearResize( w/2, h/2 ).RemoveGrain( 12,CMrg).BilinearResize( w, h ) : \
+	              (SrchClipPP == 1) ? repair0.BilinearResize( w/2, h/2 ).KRemoveGrain( 12,CMrg).BilinearResize( w, h ) : \
 	                                  repair0.KRemoveGrain( 12,CMrg).KGaussResize( p=2, chroma=ChromaMotion )
 
 	spatialBlur = (IsClip(spatialBlur) && SrchClipPP > 1) ? (ChromaMotion ? spatialBlur.KMerge( repair0, 0.1 ) : spatialBlur.KMergeLuma( repair0, 0.1 )) : spatialBlur
@@ -628,7 +628,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	# >>>> Interleaved YUY2 for interpolation
 
 	# Support badly deinterlaced progressive content - drop half the fields and reweave to get 1/2fps interlaced stream appropriate for KTGMC processing
-	ediInput = (InputType == 2 || InputType == 3) ? innerClip.SeparateFields().SelectEvery(4,0,3).Weave() : innerClip
+	ediInput = (InputType == 2 || InputType == 3) ? innerClip.SeparateFields().SelectEvery(4,0,3).KWeave() : innerClip
 
 	# Create interpolated image as starting point for output
 	edi1 = defined(EdiExt) ? EdiExt.PointResize( w,h, 0,(EdiExt.Height()-h)/2, -0,h+epsilon ) : \
@@ -699,7 +699,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	# Slightly thin down 1-pixel high horizontal edges that have been widened into neigboring field lines by the interpolator
 	SVThinSc = SVThin * 6.0
 	vertMedD = (SVthin > 0.0) ? kmt_lutxy( lossed1, lossed1.KVerticalCleaner( mode=1, modeU=-1, modeV=-1 ), "y x - " + string(SVThinSc) + " * range_half +", U=1,V=1 ) : NOP()
-	vertMedD = (SVthin > 0.0) ? (vertMedD.Blur( 1,0 )) : NOP()
+	vertMedD = (SVthin > 0.0) ? (vertMedD.KBlur( 1, 0 )) : NOP()
 	neighborD = (SVthin > 0.0) ? kmt_lutxy( vertMedD, vertMedD.KRemoveGrain( rgBlur,-1 ), "y range_half - abs x range_half - abs > y range_half ?" ) : NOP()
 	thin      = (SVthin > 0.0) ? resharp.KAddDiff( neighborD, u=2,v=2 ) : resharp
 
@@ -740,7 +740,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	# Limit over-sharpening by clamping to neighboring (spatial or temporal) min/max values in original
 	# Occurs here (after final temporal smooth) if SLMode == 3,4. Allows more sharpening here, but more prone to introducing minor artefacts
 	sharpLimit2 = (SLMode == 3) ? repair2.KRepair( ((SLrad <= 1) ? edi : repair2.KRepair( edi, 12 )), 1 ) : \
-	              (SLMode == 4) ? repair2.mt_clamp( tMax,tMin, Sovs,Sovs, U=3,V=3 ) : \
+	              (SLMode == 4) ? repair2.KClamp( tMax, tMin, overshoot=Sovs, undershoot=Sovs, u=3, v=3 ) : \
 	                              repair2
 
 	# Lossless=1 - inject source fields into result and clean up inevitable artefacts. Provided NoiseRestore=0.0 or 1.0, this mode will make the script result 
