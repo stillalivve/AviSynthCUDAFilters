@@ -609,7 +609,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 
 	# Get actual noise from difference. Then 'deinterlace' where we have weaved noise - create the missing lines of noise in various ways
 	planarDenoised = (NoiseProcess == 0) ? NOP() : yuy2 ? denoised.nonyuy2clipin(true) : denoised
-	noise = (totalRestore > 0.0)  ? mt_makediff( planarClip, planarDenoised, U=CNmt1,V=CNmt1 ) : NOP()
+	noise = (totalRestore > 0.0)  ? KMakeDiff( planarClip, planarDenoised, u=CNmt1,v=CNmt1 ) : NOP()
 	deintNoise = (NoiseProcess == 0 || totalRestore == 0.0) ? NOP() : \
 	             (InputType != 0)                           ? noise : \
 	             (NoiseDeint == "Bob")                      ? noise.KTGMC_Bob( 0,0.5 ) : \
@@ -618,7 +618,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	# Motion-compensated stabilization of generated noise
 	noiseSuper = (StabilizeNoise) ? deintNoise.MSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad, chroma=ChromaNoise ) : NOP()
 	mcNoise    = (StabilizeNoise) ? deintNoise.MCompensate( noiseSuper, bVec1, thSCD1=ThSCD1,thSCD2=ThSCD2 ) : NOP()
-	finalNoise = (StabilizeNoise) ? mt_lutxy( deintNoise, mcNoise, "x range_half - abs y range_half - abs > x y ? 0.6 * x y + 0.2 * +", U=CNmt1,V=CNmt1 ) : deintNoise
+	finalNoise = (StabilizeNoise) ? kmt_lutxy( deintNoise, mcNoise, "x range_half - abs y range_half - abs > x y ? 0.6 * x y + 0.2 * +", U=CNmt1,V=CNmt1 ) : deintNoise
 
 	# If NoiseProcess=1 denoise input clip. If NoiseProcess=2 leave noise in the clip and let the temporal blurs "denoise" it for a stronger effect
 	innerClip = (NoiseProcess == 1) ? denoised : clip
@@ -644,7 +644,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	# InputType=2,3: use motion mask to blend luma between original clip & reweaved clip based on ProgSADMask setting. Use chroma from original clip in any case
 	inputTypeBlend = (ProgSADMask > 0.0) ? MMask( srchClip, bVec1, kind=1, ml=ProgSADMask ) : NOP()
 	edi = IsClip(edi) ? edi : (InputType != 2 && InputType != 3) ? (!yuy2 ? edi1 : edi1.nonyuy2clipin(true)) :\
-	      (ProgSADMask <= 0.0)               ? (!yuy2 ? edi1.MergeChroma( innerClip ) : edi1.MergeChroma( innerClip ).nonyuy2clipin(true)) : \
+	      (ProgSADMask <= 0.0)               ? (!yuy2 ? edi1.KMergeChroma( innerClip, 1.0 ) : edi1.KMergeChroma( innerClip, 1.0 ).nonyuy2clipin(true)) : \
 	                                           (!yuy2 ? mt_merge( innerClip, edi1, inputTypeBlend, U=2,V=2 ) : \
 											            mt_merge( innerClip.nonyuy2clipin(true), edi1.nonyuy2clipin(true), inputTypeBlend, U=2,V=2 ))
 
@@ -658,10 +658,10 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	fComp1   = (temporalSL)              ? edi.KMCompensate( ediSuper, fVec1, thSCD1=ThSCD1,thSCD2=ThSCD2              ) : NOP()
 	bComp3   = (SLRad > 1 && temporalSL) ? edi.KMCompensate( ediSuper, bVec3, thSCD1=ThSCD1,thSCD2=ThSCD2              ) : NOP()
 	fComp3   = (SLRad > 1 && temporalSL) ? edi.KMCompensate( ediSuper, fVec3, thSCD1=ThSCD1,thSCD2=ThSCD2              ) : NOP()
-	tMax     = (temporalSL)              ? edi.mt_logic( fComp1, "max", U=3,V=3 ).mt_logic( bComp1, "max", U=3,V=3 )    : NOP()
-	tMin     = (temporalSL)              ? edi.mt_logic( fComp1, "min", U=3,V=3 ).mt_logic( bComp1, "min", U=3,V=3 )    : NOP()
-	tMax     = (SLRad > 1 && temporalSL) ? tMax.mt_logic( fComp3, "max", U=3,V=3 ).mt_logic( bComp3, "max", U=3,V=3 )   : tMax
-	tMin     = (SLRad > 1 && temporalSL) ? tMin.mt_logic( fComp3, "min", U=3,V=3 ).mt_logic( bComp3, "min", U=3,V=3 )   : tMin
+	tMax     = (temporalSL)              ? edi.KLogic( fComp1, "max", u=3,v=3 ).KLogic( bComp1, "max", u=3,v=3 )    : NOP()
+	tMin     = (temporalSL)              ? edi.KLogic( fComp1, "min", u=3,v=3 ).KLogic( bComp1, "min", u=3,v=3 )    : NOP()
+	tMax     = (SLRad > 1 && temporalSL) ? tMax.KLogic( fComp3, "max", u=3,v=3 ).KLogic( bComp3, "max", u=3,v=3 )   : tMax
+	tMin     = (SLRad > 1 && temporalSL) ? tMin.KLogic( fComp3, "min", u=3,v=3 ).KLogic( bComp3, "min", u=3,v=3 )   : tMin
 	
 	#---------------------------------------
 	# Create basic output
@@ -693,17 +693,17 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 
 	# Resharpen to counteract temporal blurs. Little sharpening needed for source-match mode since it has already recovered sharpness from source
 	vresharp1 = (SMode == 2) ? KTGMC_VResharpen( lossed1 ,U=3,V=3 ) : NOP()
-	vresharp  = (Precise && SMode == 2) ? vresharp1.mt_lutxy( lossed1, "x y < x 1 scalef + x y > x 1 scalef - x ? ?", U=3,V=3 ) : vresharp1 # Precise mode: reduce tiny overshoot
+	vresharp  = (Precise && SMode == 2) ? vresharp1.kmt_lutxy( lossed1, "x y < x 1 scalef + x y > x 1 scalef - x ? ?", U=3,V=3 ) : vresharp1 # Precise mode: reduce tiny overshoot
 	resharp   = (SMode == 0) ? lossed1 : \
 	            (SMode == 1) ? lossed1.KTGMC_Resharpen( lossed1.KRemoveGrain( rgBlur ),  sharpAdj, U=3,V=3 ) : \
 	                           lossed1.KTGMC_Resharpen( vresharp.KRemoveGrain( rgBlur ), sharpAdj, U=3,V=3 )
 
 	# Slightly thin down 1-pixel high horizontal edges that have been widened into neigboring field lines by the interpolator
 	SVThinSc = SVThin * 6.0
-	vertMedD = (SVthin > 0.0) ? mt_lutxy( lossed1, lossed1.VerticalCleaner( mode=1, modeU=-1, modeV=-1 ), "y x - " + string(SVThinSc) + " * range_half +", U=1,V=1 ) : NOP()
+	vertMedD = (SVthin > 0.0) ? kmt_lutxy( lossed1, lossed1.KVerticalCleaner( mode=1, modeU=-1, modeV=-1 ), "y x - " + string(SVThinSc) + " * range_half +", U=1,V=1 ) : NOP()
 	vertMedD = (SVthin > 0.0) ? (vertMedD.Blur( 1,0 )) : NOP()
-	neighborD = (SVthin > 0.0) ? mt_lutxy( vertMedD, vertMedD.RemoveGrain( rgBlur,-1 ), "y range_half - abs x range_half - abs > y range_half ?" ) : NOP()
-	thin      = (SVthin > 0.0) ? resharp.mt_adddiff( neighborD, U=2,V=2 ) : resharp
+	neighborD = (SVthin > 0.0) ? kmt_lutxy( vertMedD, vertMedD.KRemoveGrain( rgBlur,-1 ), "y range_half - abs x range_half - abs > y range_half ?" ) : NOP()
+	thin      = (SVthin > 0.0) ? resharp.KAddDiff( neighborD, u=2,v=2 ) : resharp
 
 	# Back blend the blurred difference between sharpened & unsharpened clip, before (1st) sharpness limiting (Sbb == 1,3). A small fidelity improvement
 	backBlend1 = (Sbb != 1 && Sbb != 3) ? thin : \
@@ -712,19 +712,19 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 
 	# Limit over-sharpening by clamping to neighboring (spatial or temporal) min/max values in original
 	# Occurs here (before final temporal smooth) if SLMode == 1,2. This location will restrict sharpness more, but any artefacts introduced will be smoothed
-	sharpLimit1 = (SLMode == 1) ? backBlend1.Repair( ((SLrad <= 1) ? edi : backBlend1.Repair( edi, 12 )), 1 ) : \
+	sharpLimit1 = (SLMode == 1) ? backBlend1.KRepair( ((SLrad <= 1) ? edi : backBlend1.KRepair( edi, 12 )), 1 ) : \
 	              (SLMode == 2) ? backBlend1.KTGMC_LimitOverSharpen( edi, fComp1,bComp1, Sovs, U=3,V=3 ) : \
 	                              backBlend1
 
 	# Back blend the blurred difference between sharpened & unsharpened clip, after (1st) sharpness limiting (Sbb == 2,3). A small fidelity improvement
 	backBlend2 = (Sbb < 2) ? sharpLimit1 : \
-		                 sharpLimit1.mt_makediff( mt_makediff( sharpLimit1, lossed1, U=1,V=1 ).RemoveGrain( 12, -1 ) \
-	                                    .GaussResize( w,h, 0,0, w+epsilon,h+epsilon, p=5 ), U=2,V=2 )
+		                 sharpLimit1.KMakeDiff( KMakeDiff( sharpLimit1, lossed1, u=1,v=1 ).KRemoveGrain( 12, -1 ) \
+	                                    .KGaussResize( p=5, chroma=true ), U=2,V=2 )
 
 	# Add back any extracted noise, prior to final temporal smooth - this will restore detail that was removed as "noise" without restoring the noise itself
 	# Average luma of FFT3DFilter extracted noise is 128.5, so deal with that too
 	addNoise1 = (GrainRestore <= 0.0) ? backBlend2 : \
-		                                backBlend2.mt_adddiff( finalNoise.mt_lut( "x " + noiseCentre + " scalef - " + string(GrainRestore) + " * range_half +", U=CNmt1,V=CNmt1 ), U=CNmt2,V=CNmt2 )
+		                                backBlend2.KAddDiff( finalNoise.kmt_lut( "x " + noiseCentre + " scalef - " + string(GrainRestore) + " * range_half +", U=CNmt1,V=CNmt1 ), u=CNmt2,v=CNmt2 )
 
 	# Final light linear temporal smooth for denoising
 	stableSuper = (TR2 > 0) ? addNoise1.KMSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad ) : NOP()
@@ -741,7 +741,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 
 	# Limit over-sharpening by clamping to neighboring (spatial or temporal) min/max values in original
 	# Occurs here (after final temporal smooth) if SLMode == 3,4. Allows more sharpening here, but more prone to introducing minor artefacts
-	sharpLimit2 = (SLMode == 3) ? repair2.Repair( ((SLrad <= 1) ? edi : repair2.Repair( edi, 12 )), 1 ) : \
+	sharpLimit2 = (SLMode == 3) ? repair2.KRepair( ((SLrad <= 1) ? edi : repair2.KRepair( edi, 12 )), 1 ) : \
 	              (SLMode == 4) ? repair2.mt_clamp( tMax,tMin, Sovs,Sovs, U=3,V=3 ) : \
 	                              repair2
 
@@ -752,7 +752,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	# Add back any extracted noise, after final temporal smooth. This will appear as noise/grain in the output
 	# Average luma of FFT3DFilter extracted noise is 128.5, so deal with that too
 	addNoise2 = (NoiseRestore <= 0.0) ? lossed2 : \
-		                                lossed2.mt_adddiff( finalNoise.mt_lut( "clamp_f x " + noiseCentre + " scalef - " + string(NoiseRestore) + " * range_half +", U=CNmt1,V=CNmt1 ), U=CNmt2,V=CNmt2 )
+		                                lossed2.KAddDiff( finalNoise.kmt_lut( "clamp_f x " + noiseCentre + " scalef - " + string(NoiseRestore) + " * range_half +", U=CNmt1,V=CNmt1 ), u=CNmt2,v=CNmt2 )
 
 
 	#---------------------------------------
@@ -794,7 +794,7 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 
 	# Show output of choice + settings
 	# >>>> Restore YUY2 to interleaved
-	output = (ShowNoise == 0.0) ? cropped : finalNoise.mt_lut( "clamp_f x range_half - " + string(ShowNoise) + " * range_half +", U=CNmt128,V=CNmt128 )
+	output = (ShowNoise == 0.0) ? cropped : finalNoise.kmt_lut( "clamp_f x range_half - " + string(ShowNoise) + " * range_half +", U=CNmt128,V=CNmt128 )
 	output = yuy2 ? output.nonyuy2clipout(true) : output
 	return (ShowSettings == false) ? output : \
 		output.Subtitle( "TR0=" + string(TR0) + " | TR1=" + string(TR1) + " | TR2=" + string(TR2) + " | Rep0=" + string(Rep0) + " | Rep1=" + string(Rep1) + \
@@ -923,30 +923,30 @@ function KTGMC_KeepOnlyBobShimmerFixes( clip Input, clip Ref, int Rep, bool Chro
 
 	# Areas of positive difference                                                                # ed = 0 1 2 3 4 5 6 7
 	choke1 =                        diff.  KInpandVerticalX2( U=RCrg,V=RCrg )                     #      x x x x x x x x    1 pixel   \
-	choke1 = (ed > 5)             ? choke1.mt_inpand( mode="vertical", U=RCrg,V=RCrg ) : choke1   #      . . . . . . x x    1 pixel   /
+	choke1 = (ed > 5)             ? choke1.KInpandVerticalX2( U=RCrg,V=RCrg ) : choke1   #      . . . . . . x x    1 pixel   /
 	choke1 = (ed % 3 != 0)        ? choke1.KTGMC_deflate( U=RCrg,V=RCrg )              : choke1   #      . x x . x x . x    A bit more deflate & some horizonal effect
-	choke1 = (ed == 2 || ed == 5) ? choke1.RemoveGrain( 4              )               : choke1   #      . . x . . x . .    Local median
+	choke1 = (ed == 2 || ed == 5) ? choke1.KRemoveGrain( 4              )               : choke1   #      . . x . . x . .    Local median
                                                                                                                       
 	choke1 =                        choke1.KExpandVerticalX2( U=RCrg,V=RCrg )                     #      x x x x x x x x    1 pixel  \
-	choke1 = (ed > 4)             ? choke1.mt_expand( mode="vertical", U=RCrg,V=RCrg ) : choke1   #      . . . . . x x x    1 pixel  /
+	choke1 = (ed > 4)             ? choke1.KExpandVerticalX2( U=RCrg,V=RCrg ) : choke1   #      . . . . . x x x    1 pixel  /
 
 	# Over-dilation - extra reflation up to about 1 pixel
 	choke1 = (od == 0)            ? choke1 : \
 	         (od == 1)            ? choke1.KTGMC_inflate( U=RCrg,V=RCrg ) : \
 	         (od == 2)            ? choke1.KTGMC_inflate( U=RCrg,V=RCrg ).KTGMC_inflate( U=RCrg,V=RCrg ) : \
-	                                choke1.mt_expand ( U=RCrg,V=RCrg )
+	                                choke1.KExpandVerticalX2( U=RCrg,V=RCrg )
 
 	# Areas of negative difference (similar to above)
 	choke2 =                        diff.  KExpandVerticalX2( U=RCrg,V=RCrg )         
-	choke2 = (ed > 5)             ? choke2.mt_expand( mode="vertical", U=RCrg,V=RCrg ) : choke2
+	choke2 = (ed > 5)             ? choke2.KExpandVerticalX2( U=RCrg,V=RCrg ) : choke2
 	choke2 = (ed % 3 != 0)        ? choke2.KTGMC_inflate( U=RCrg,V=RCrg )              : choke2
-	choke2 = (ed == 2 || ed == 5) ? choke2.RemoveGrain( 4              )               : choke2
+	choke2 = (ed == 2 || ed == 5) ? choke2.KRemoveGrain( 4              )               : choke2
 	choke2 =                        choke2.KInpandVerticalX2( U=RCrg,V=RCrg )
-	choke2 = (ed > 4)             ? choke2.mt_inpand( mode="vertical", U=RCrg,V=RCrg ) : choke2
+	choke2 = (ed > 4)             ? choke2.KInpandVerticalX2( U=RCrg,V=RCrg ) : choke2
 	choke2 = (od == 0)            ? choke2 : \
 	         (od == 1)            ? choke2.KTGMC_deflate( U=RCrg,V=RCrg )  : \
 	         (od == 2)            ? choke2.KTGMC_deflate( U=RCrg,V=RCrg ).KTGMC_deflate( U=RCrg,V=RCrg ) : \
-	                                choke2.mt_inpand ( U=RCrg,V=RCrg )
+	                                choke2.KInpandVerticalX2( U=RCrg,V=RCrg )
 
 	# Combine above areas to find those areas of difference to restore
 	return Input.KTGMC_BobShimmerFixesMerge(diff, choke1, choke2, U=RCrgo,V=RCrgo )
