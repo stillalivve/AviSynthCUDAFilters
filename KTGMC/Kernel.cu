@@ -3162,10 +3162,33 @@ __global__ void kl_weave(
   }
 }
 
+// The weave of two frames into a frame of the same height: the even lines
+// come from the first frame, the odd lines from the second one.  The line
+// number is the same in both frames.
+template <typename vpixel_t>
+__global__ void kl_weave_fields(
+  vpixel_t* dst, int dst_pitch4,
+  const vpixel_t* top, int top_pitch4,
+  const vpixel_t* bottom, int bottom_pitch4,
+  int width4, int height)
+{
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (x < width4 && y < height) {
+    const vpixel_t* src = (y & 1) ? bottom : top;
+    const int pitch = (y & 1) ? bottom_pitch4 : top_pitch4;
+    dst[x + y * dst_pitch4] = src[x + y * pitch];
+  }
+}
+
 class KDoubleWeave : public CUDAFilterBase
 {
   int logUVx;
   int logUVy;
+  // The core weaves field based material into frames of double height and
+  // doubles the number of the frames of progressive material.
+  bool fieldBased;
 
   template <typename pixel_t>
   void Proc(PVideoFrame& dst, PVideoFrame& top, PVideoFrame& bottom, PNeoEnv env)
@@ -3199,14 +3222,80 @@ class KDoubleWeave : public CUDAFilterBase
     }
   }
 
+  // Copy a frame to the destination.
+  void CopyFrame(PVideoFrame& dst, PVideoFrame& src, PNeoEnv env)
+  {
+    cudaStream_t stream = static_cast<cudaStream_t>(env->GetDeviceStream());
+    const int planes[] = { PLANAR_Y, PLANAR_U, PLANAR_V };
+    const int pixelSize = vi.ComponentSize();
+
+    for (int p = 0; p < 3; ++p) {
+      int width = vi.width;
+      int height = vi.height;
+      if (p > 0) {
+        width >>= logUVx;
+        height >>= logUVy;
+      }
+      cudaMemcpy2DAsync(
+        dst->GetWritePtr(planes[p]), dst->GetPitch(planes[p]),
+        src->GetReadPtr(planes[p]), src->GetPitch(planes[p]),
+        width * pixelSize, height,
+        cudaMemcpyDeviceToDevice, stream);
+    }
+    DEBUG_SYNC;
+  }
+
+  // The weave of two frames into a frame of the same height.
+  template <typename pixel_t>
+  void ProcFields(PVideoFrame& dst, PVideoFrame& top, PVideoFrame& bottom, PNeoEnv env)
+  {
+    typedef typename VectorType<pixel_t>::type vpixel_t;
+    cudaStream_t stream = static_cast<cudaStream_t>(env->GetDeviceStream());
+    const int planes[] = { PLANAR_Y, PLANAR_U, PLANAR_V };
+
+    for (int p = 0; p < 3; ++p) {
+      const vpixel_t* pTop = reinterpret_cast<const vpixel_t*>(top->GetReadPtr(planes[p]));
+      const vpixel_t* pBottom = reinterpret_cast<const vpixel_t*>(bottom->GetReadPtr(planes[p]));
+      vpixel_t* pDst = reinterpret_cast<vpixel_t*>(dst->GetWritePtr(planes[p]));
+      int topPitch4 = top->GetPitch(planes[p]) / sizeof(pixel_t) / 4;
+      int bottomPitch4 = bottom->GetPitch(planes[p]) / sizeof(pixel_t) / 4;
+      int dstPitch4 = dst->GetPitch(planes[p]) / sizeof(pixel_t) / 4;
+
+      int width4 = vi.width / 4;
+      int height = vi.height;
+
+      if (p > 0) {
+        width4 >>= logUVx;
+        height >>= logUVy;
+      }
+
+      dim3 threads(32, 16);
+      dim3 blocks(nblocks(width4, threads.x), nblocks(height, threads.y));
+      kl_weave_fields << <blocks, threads, 0, stream>> > (
+        pDst, dstPitch4, pTop, topPitch4, pBottom, bottomPitch4, width4, height);
+      DEBUG_SYNC;
+    }
+  }
+
 public:
   KDoubleWeave(PClip child, IScriptEnvironment* env_)
     : CUDAFilterBase(child)
     , logUVx(vi.GetPlaneWidthSubsampling(PLANAR_U))
     , logUVy(vi.GetPlaneHeightSubsampling(PLANAR_U))
+    , fieldBased(vi.IsFieldBased())
   {
-    vi.height *= 2;
-    vi.SetFieldBased(false);
+    if (fieldBased) {
+      // Two frames are woven into one frame of double height, the number of
+      // the frames does not change.
+      vi.height *= 2;
+      vi.SetFieldBased(false);
+    }
+    else {
+      // Progressive material: the number of the frames is doubled.  Every
+      // second frame holds the even lines of the frame before and the odd
+      // lines of the frame after, that is what the core does.
+      vi.num_frames *= 2;
+    }
   }
 
   PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env_)
@@ -3221,6 +3310,35 @@ public:
       printf("KDoubleWeave[CUDA]: N=%d\n", n);
     }
 #endif
+    if (!fieldBased) {
+      // Progressive material: the frames are doubled.  The even frames are
+      // the source frames, the odd frames hold the even lines of the frame
+      // before and the odd lines of the frame after.
+      const int k = n / 2;
+      PVideoFrame a = child->GetFrame(k, env);
+      PVideoFrame dst = env->NewVideoFrame(vi);
+
+      if ((n & 1) == 0) {
+        CopyFrame(dst, a, env);
+      }
+      else {
+        PVideoFrame b = child->GetFrame(k + 1, env);
+        const int pixelSize = vi.ComponentSize();
+        switch (pixelSize) {
+        case 1:
+          ProcFields<uint8_t>(dst, a, b, env);
+          break;
+        case 2:
+          ProcFields<uint16_t>(dst, a, b, env);
+          break;
+        default:
+          env->ThrowError("[KDoubleWeave] Unsupported pixel format");
+        }
+      }
+
+      return dst;
+    }
+
     PVideoFrame a = child->GetFrame(n, env);
     PVideoFrame b = child->GetFrame(n + 1, env);
     PVideoFrame dst = env->NewVideoFrame(vi);
