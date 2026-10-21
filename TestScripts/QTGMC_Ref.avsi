@@ -479,12 +479,12 @@ function QTGMC_Ref( clip Input, string "Preset", int "TR0", int "TR1", int "TR2"
 	                                  repair0.RemoveGrain( 12,CMrg).GaussResize( w,h, 0,0, w+epsilon,h+epsilon, p=2 )
 
 	spatialBlur = (IsClip(spatialBlur) && SrchClipPP > 1) ? (ChromaMotion ? spatialBlur.Merge( repair0, 0.1 ) : spatialBlur.MergeLuma( repair0, 0.1 )) : spatialBlur
-	tweaked     = (!IsClip(srchClip) && SrchClipPP > 1) ? mt_lutxy( repair0, bobbed, "x 3 scalef + y < x 3 scalef + x 3 scalef - y > x 3 scalef - y ? ?", U=CMmt,V=CMmt ) : NOP()
+	tweaked     = (!IsClip(srchClip) && SrchClipPP > 1) ? kmt_lutxy( repair0, bobbed, "x 3 scalef + y < x 3 scalef + x 3 scalef - y > x 3 scalef - y ? ?", U=CMmt,V=CMmt ) : NOP()
 	srchcheck   = IsClip(srchClip)
 	srchClip    = srchcheck         ? srchClip : \
 	              (SrchClipPP == 0) ? repair0 : \
 	              (SrchClipPP < 3)  ? spatialBlur : \
-	                                  spatialBlur.mt_lutxy( tweaked, "x 7 scalef + y < x 2 scalef + x 7 scalef - y > x 2 scalef - x 51 * y 49 * + 100 / ? ?", U=CMmt,V=CMmt )
+	                                  spatialBlur.kmt_lutxy( tweaked, "x 7 scalef + y < x 2 scalef + x 7 scalef - y > x 2 scalef - x 51 * y 49 * + 100 / ? ?", U=CMmt,V=CMmt )
 	srchClip    = tv_range && !srchcheck ? srchClip.Dither_Luma_Rebuild(S0=Str,c=Amp,slice=false,lsb=lsb,uv=CMmt) : srchClip
 	# Calculate forward and backward motion vectors from motion search clip
 	srchSuper = IsClip(srchSuper) ? srchSuper : \
@@ -601,7 +601,7 @@ function QTGMC_Ref( clip Input, string "Preset", int "TR0", int "TR1", int "TR2"
 	# Motion-compensated stabilization of generated noise
 	noiseSuper = (StabilizeNoise) ? deintNoise.MSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad, chroma=ChromaNoise ) : NOP()
 	mcNoise    = (StabilizeNoise) ? deintNoise.MCompensate( noiseSuper, bVec1, thSCD1=ThSCD1,thSCD2=ThSCD2 ) : NOP()
-	finalNoise = (StabilizeNoise) ? mt_lutxy( deintNoise, mcNoise, "x range_half - abs y range_half - abs > x y ? 0.6 * x y + 0.2 * +", U=CNmt1,V=CNmt1 ) : deintNoise
+	finalNoise = (StabilizeNoise) ? kmt_lutxy( deintNoise, mcNoise, "x range_half - abs y range_half - abs > x y ? 0.6 * x y + 0.2 * +", U=CNmt1,V=CNmt1 ) : deintNoise
 
 	# If NoiseProcess=1 denoise input clip. If NoiseProcess=2 leave noise in the clip and let the temporal blurs "denoise" it for a stronger effect
 	innerClip = (NoiseProcess == 1) ? denoised : clip
@@ -677,16 +677,16 @@ function QTGMC_Ref( clip Input, string "Preset", int "TR0", int "TR1", int "TR2"
 
 	# Resharpen to counteract temporal blurs. Little sharpening needed for source-match mode since it has already recovered sharpness from source
 	vresharp1 = (SMode == 2) ? Merge( lossed1.mt_expand( mode="vertical", U=3,V=3 ), lossed1.mt_inpand( mode="vertical", U=3,V=3 ) ) : NOP()
-	vresharp  = (Precise && SMode == 2) ? vresharp1.mt_lutxy( lossed1, "x y < x 1 scalef + x y > x 1 scalef - x ? ?", U=3,V=3 ) : vresharp1 # Precise mode: reduce tiny overshoot
+	vresharp  = (Precise && SMode == 2) ? vresharp1.kmt_lutxy( lossed1, "x y < x 1 scalef + x y > x 1 scalef - x ? ?", U=3,V=3 ) : vresharp1 # Precise mode: reduce tiny overshoot
 	resharp   = (SMode == 0) ? lossed1 : \
-	            (SMode == 1) ? lossed1.mt_lutxy( lossed1.RemoveGrain( rgBlur ),  "clamp_f x x y - "+ string(sharpAdj) + " * +", U=3,V=3 ) : \
-	                           lossed1.mt_lutxy( vresharp.RemoveGrain( rgBlur ), "clamp_f x x y - "+ string(sharpAdj) + " * +", U=3,V=3 )
+	            (SMode == 1) ? lossed1.kmt_lutxy( lossed1.RemoveGrain( rgBlur ),  "clamp_f x x y - "+ string(sharpAdj) + " * +", U=3,V=3 ) : \
+	                           lossed1.kmt_lutxy( vresharp.RemoveGrain( rgBlur ), "clamp_f x x y - "+ string(sharpAdj) + " * +", U=3,V=3 )
 
 	# Slightly thin down 1-pixel high horizontal edges that have been widened into neigboring field lines by the interpolator
 	SVThinSc = SVThin * 6.0
-	vertMedD = (SVthin > 0.0) ? mt_lutxy( lossed1, lossed1.VerticalCleaner( mode=1, modeU=-1, modeV=-1 ), "y x - " + string(SVThinSc) + " * range_half +", U=1,V=1 ) : NOP()
+	vertMedD = (SVthin > 0.0) ? kmt_lutxy( lossed1, lossed1.VerticalCleaner( mode=1, modeU=-1, modeV=-1 ), "y x - " + string(SVThinSc) + " * range_half +", U=1,V=1 ) : NOP()
 	vertMedD = (SVthin > 0.0) ? (vertMedD.Blur( 1,0 )) : NOP()
-	neighborD = (SVthin > 0.0) ? mt_lutxy( vertMedD, vertMedD.RemoveGrain( rgBlur,-1 ), "y range_half - abs x range_half - abs > y range_half ?" ) : NOP()
+	neighborD = (SVthin > 0.0) ? kmt_lutxy( vertMedD, vertMedD.RemoveGrain( rgBlur,-1 ), "y range_half - abs x range_half - abs > y range_half ?" ) : NOP()
 	thin      = (SVthin > 0.0) ? resharp.mt_adddiff( neighborD, U=2,V=2 ) : resharp
 
 	# Back blend the blurred difference between sharpened & unsharpened clip, before (1st) sharpness limiting (Sbb == 1,3). A small fidelity improvement
@@ -708,7 +708,7 @@ function QTGMC_Ref( clip Input, string "Preset", int "TR0", int "TR1", int "TR2"
 	# Add back any extracted noise, prior to final temporal smooth - this will restore detail that was removed as "noise" without restoring the noise itself
 	# Average luma of FFT3DFilter extracted noise is 128.5, so deal with that too
 	addNoise1 = (GrainRestore <= 0.0) ? backBlend2 : \
-		                                backBlend2.mt_adddiff( finalNoise.mt_lut( "x " + noiseCentre + " scalef - " + string(GrainRestore) + " * range_half +", U=CNmt1,V=CNmt1 ), U=CNmt2,V=CNmt2 )
+		                                backBlend2.mt_adddiff( finalNoise.kmt_lut( "x " + noiseCentre + " scalef - " + string(GrainRestore) + " * range_half +", U=CNmt1,V=CNmt1 ), U=CNmt2,V=CNmt2 )
 
 	# Final light linear temporal smooth for denoising
 	stableSuper = (TR2 > 0) ? addNoise1.MSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad ) : NOP()
@@ -736,7 +736,7 @@ function QTGMC_Ref( clip Input, string "Preset", int "TR0", int "TR1", int "TR2"
 	# Add back any extracted noise, after final temporal smooth. This will appear as noise/grain in the output
 	# Average luma of FFT3DFilter extracted noise is 128.5, so deal with that too
 	addNoise2 = (NoiseRestore <= 0.0) ? lossed2 : \
-		                                lossed2.mt_adddiff( finalNoise.mt_lut( "clamp_f x " + noiseCentre + " scalef - " + string(NoiseRestore) + " * range_half +", U=CNmt1,V=CNmt1 ), U=CNmt2,V=CNmt2 )
+		                                lossed2.mt_adddiff( finalNoise.kmt_lut( "clamp_f x " + noiseCentre + " scalef - " + string(NoiseRestore) + " * range_half +", U=CNmt1,V=CNmt1 ), U=CNmt2,V=CNmt2 )
 
 
 	#---------------------------------------
@@ -778,7 +778,7 @@ function QTGMC_Ref( clip Input, string "Preset", int "TR0", int "TR1", int "TR2"
 
 	# Show output of choice + settings
 	# >>>> Restore YUY2 to interleaved
-	output = (ShowNoise == 0.0) ? cropped : finalNoise.mt_lut( "clamp_f x range_half - " + string(ShowNoise) + " * range_half +", U=CNmt128,V=CNmt128 )
+	output = (ShowNoise == 0.0) ? cropped : finalNoise.kmt_lut( "clamp_f x range_half - " + string(ShowNoise) + " * range_half +", U=CNmt128,V=CNmt128 )
 	output = yuy2 ? output.nonyuy2clipout(true) : output
 	return (ShowSettings == false) ? output : \
 		output.Subtitle( "TR0=" + string(TR0) + " | TR1=" + string(TR1) + " | TR2=" + string(TR2) + " | Rep0=" + string(Rep0) + " | Rep1=" + string(Rep1) + \
@@ -948,7 +948,7 @@ function QTGMC_Ref_KeepOnlyBobShimmerFixes( clip Input, clip Ref, int Rep, bool 
 	                                choke2.mt_inpand ( U=RCrg,V=RCrg )
 
 	# Combine above areas to find those areas of difference to restore
-	restore = diff.mt_lutxy( choke1, "x 129 scalef < x y range_half < range_half y ? ?", U=RCrg,V=RCrg ).mt_lutxy( choke2, "x 127 scalef > x y range_half > range_half y ? ?", U=RCrg,V=RCrg )
+	restore = diff.kmt_lutxy( choke1, "x 129 scalef < x y range_half < range_half y ? ?", U=RCrg,V=RCrg ).kmt_lutxy( choke2, "x 127 scalef > x y range_half > range_half y ? ?", U=RCrg,V=RCrg )
 
 	return Input.mt_adddiff( restore, U=RCrgo,V=RCrgo )
 }
@@ -967,7 +967,7 @@ function QTGMC_Ref_Generate2ndFieldNoise( clip Input, clip InterleavedClip, bool
 	noiseMin  = origNoise.kmt_inpand( mode="square", U=CNmt1,V=CNmt1 ).kmt_inpand( mode="horizontal", U=CNmt1,V=CNmt1 )
 	random    = BlankClip( InterleavedClip.SeparateFields(), color_yuv=$808080 ).AddGrainC( var=1800, uvar=ChromaNoise ? 1800 : 0 )
 	random    = InterleavedClip.IsYUY2() ? random.nonyuy2clipin(true) : random
-	varRandom = mt_makediff( noiseMax, noiseMin, U=CNmt1,V=CNmt1 ).mt_lutxy( random, "clamp_f_i8 x range_half - y * range_size / range_half +", U=CNmt1,V=CNmt1)
+	varRandom = mt_makediff( noiseMax, noiseMin, U=CNmt1,V=CNmt1 ).kmt_lutxy( random, "clamp_f_i8 x range_half - y * range_size / range_half +", U=CNmt1,V=CNmt1)
 	newNoise  = noiseMin.mt_adddiff( varRandom, U=CNmt1,V=CNmt1 )
 	return Interleave( origNoise, newNoise ).Weave()
 }
@@ -991,7 +991,7 @@ function QTGMC_Ref_MakeLossless( clip Input, clip Source, int InputType )
 	vertMedian  = processed.VerticalCleaner( mode=1 )
 	vertMedDiff = mt_makediff( processed, vertMedian, U=3,V=3 )
 	vmNewDiff1  = vertMedDiff.SeparateFields().SelectEvery( 4, 1,2 )
-	vmNewDiff2  = vmNewDiff1.VerticalCleaner( mode=1 ).mt_lutxy( vmNewDiff1, "x range_half - y range_half - * 0 < range_half x range_half - abs y range_half - abs < x y ? ?", U=3,V=3 )
+	vmNewDiff2  = vmNewDiff1.VerticalCleaner( mode=1 ).kmt_lutxy( vmNewDiff1, "x range_half - y range_half - * 0 < range_half x range_half - abs y range_half - abs < x y ? ?", U=3,V=3 )
 	vmNewDiff3  = vmNewDiff2.Repair( vmNewDiff2.RemoveGrain( 2 ), 1 )
 
 	# Reweave final result
@@ -1023,7 +1023,7 @@ function QTGMC_Ref_ApplySourceMatch( clip Deinterlace, int InputType, val Source
 	errorAdjust1   = Select( MatchTR1, 1.0, 2.0 / (1.0 + errorTemporalSimilarity), 8.0 / (3.0 + 5.0 * errorTemporalSimilarity) )
 	match1Clip     = (SourceMatch < 1 || InputType == 1) ? Deinterlace : Deinterlace.SeparateFields().SelectEvery( 4, 0,3 ).Weave()
 	match1Update   = (SourceMatch < 1 || MatchTR1 == 0) \
-						? Source : mt_lutxy( Source, match1Clip, "clamp_f x " + string(errorAdjust1 + 1) + " * y " + string(errorAdjust1) + " * -", U=3,V=3 )
+						? Source : kmt_lutxy( Source, match1Clip, "clamp_f x " + string(errorAdjust1 + 1) + " * y " + string(errorAdjust1) + " * -", U=3,V=3 )
 
 	noyv16ma1Edi   = MatchEdi =="NNEDI2" || MatchEdi =="NNEDI" || MatchEdi =="EEDI3+NNEDI3" || MatchEdi =="EEDI3" || MatchEdi =="EEDI2" || MatchEdi =="TDeint" || MatchEdi =="cYadif" || MatchEdi =="RepcYadif"
 	noyv16ma2Edi   = MatchEdi2=="NNEDI2" || MatchEdi2=="NNEDI" || MatchEdi2=="EEDI3+NNEDI3" || MatchEdi2=="EEDI3" || MatchEdi2=="EEDI2" || MatchEdi2=="TDeint" || MatchEdi2=="cYadif" || MatchEdi2=="RepcYadif"
@@ -1043,7 +1043,7 @@ function QTGMC_Ref_ApplySourceMatch( clip Deinterlace, int InputType, val Source
 	                                     match1Degrain1.Merge( match1Degrain2, 0.2 ).Merge( match1Edi, 0.0625 )
 
 	# Enhance effect of source-match stages 2 & 3 by sharpening clip prior to refinement (source-match tends to underestimate so this will leave result sharper)
-	match1Shp = (SourceMatch > 1 && MatchEnhance > 0.0) ? match1.mt_lutxy( match1.RemoveGrain( 12 ), "clamp_f x x y - "+ string(MatchEnhance) + " * +", U=3,V=3 ) : match1
+	match1Shp = (SourceMatch > 1 && MatchEnhance > 0.0) ? match1.kmt_lutxy( match1.RemoveGrain( 12 ), "clamp_f x x y - "+ string(MatchEnhance) + " * +", U=3,V=3 ) : match1
 
 	# Source-match refinement. Find difference between source clip & equivalent fields in (updated) interpolated/smoothed clip. Interpolate & binomially smooth
 	# this difference then add it back to output. Helps restore differences that the basic match missed. However, as this pass works on a difference rather than
@@ -1069,7 +1069,7 @@ function QTGMC_Ref_ApplySourceMatch( clip Deinterlace, int InputType, val Source
 	# Source-match second refinement - correct error introduced in the refined difference by temporal smoothing. Similar to error correction from basic step
 	errorAdjust2   = Select( MatchTR2, 1.0, 2.0 / (1.0 + errorTemporalSimilarity), 8.0 / (3.0 + 5.0 * errorTemporalSimilarity) )
 	match3Update   = (SourceMatch < 3 || MatchTR2 == 0) \
-	                     ? match2Edi : mt_lutxy( match2Edi, match2, "clamp_f x " + string(errorAdjust2 + 1) + " * y " + string(errorAdjust2) + " * -", U=3,V=3 )
+	                     ? match2Edi : kmt_lutxy( match2Edi, match2, "clamp_f x " + string(errorAdjust2 + 1) + " * y " + string(errorAdjust2) + " * -", U=3,V=3 )
 	match3Super    = (SourceMatch > 2 && MatchTR2 > 0) ? match3Update.MSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad ) : NOP()
 	match3Degrain1 = (SourceMatch > 2 && MatchTR2 > 0) ? match3Update.MDegrain1( match3Super, bVec1,fVec1, thSAD=ThSAD1, thSCD1=ThSCD1,thSCD2=ThSCD2, lsb=lsb ) : NOP()
 	match3Degrain2 = (SourceMatch > 2 && MatchTR2 > 1) ? match3Update.MDegrain1( match3Super, bVec2,fVec2, thSAD=ThSAD1, thSCD1=ThSCD1,thSCD2=ThSCD2, lsb=lsb ) : NOP()
