@@ -3696,7 +3696,11 @@ __global__ void kl_merge_mask(
       else if (m != 0) {
         dst[x + y * pitch] = (pixel_t)(((256 - m) * (int)src0[x + y * pitch] + m * (int)src1[x + y * pitch] + 128) >> 8);
       }
-      // m == 0: keep src0
+      else {
+        // m == 0: keep src0.  The destination has to be written in every
+        // case, otherwise it keeps the uninitialized contents of the frame.
+        dst[x + y * pitch] = src0[x + y * pitch];
+      }
     }
     else {
       if (m == maxval) {
@@ -3705,7 +3709,10 @@ __global__ void kl_merge_mask(
       else if (m != 0) {
         dst[x + y * pitch] = (pixel_t)(((int64_t)src0[x + y * pitch] * (maxval - m) + (int64_t)src1[x + y * pitch] * m + maxval / 2) / maxval);
       }
-      // m == 0: keep src0
+      else {
+        // m == 0: keep src0
+        dst[x + y * pitch] = src0[x + y * pitch];
+      }
     }
   }
 }

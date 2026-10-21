@@ -599,7 +599,12 @@ public:
   int __stdcall SetCacheHints(int cachehints, int frame_range)
   {
     if (cachehints == CACHE_GET_DEV_TYPE) {
-      return DEV_TYPE_CPU | DEV_TYPE_CUDA;
+      // The mask is consumed by KMergeMask, which is a CUDA only filter.  If
+      // this filter may also be evaluated on the CPU, the framework is free to
+      // produce a host frame here and the CUDA merge would read that host
+      // pointer as a device pointer.  So the mask is always produced on the
+      // device.
+      return DEV_TYPE_CUDA;
     }
     else if (cachehints == CACHE_GET_MTMODE) {
       return MT_NICE_FILTER;
