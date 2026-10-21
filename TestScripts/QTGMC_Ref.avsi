@@ -963,8 +963,8 @@ function QTGMC_Ref_Generate2ndFieldNoise( clip Input, clip InterleavedClip, bool
 	ChromaNoise = default( ChromaNoise, false )
 	CNmt1 = ChromaNoise ? 3 : 1
 	origNoise = Input.SeparateFields()
-	noiseMax  = origNoise.mt_expand( mode="square", U=CNmt1,V=CNmt1 ).mt_expand( mode="horizontal", U=CNmt1,V=CNmt1 )
-	noiseMin  = origNoise.mt_inpand( mode="square", U=CNmt1,V=CNmt1 ).mt_inpand( mode="horizontal", U=CNmt1,V=CNmt1 )
+	noiseMax  = origNoise.kmt_expand( mode="square", U=CNmt1,V=CNmt1 ).kmt_expand( mode="horizontal", U=CNmt1,V=CNmt1 )
+	noiseMin  = origNoise.kmt_inpand( mode="square", U=CNmt1,V=CNmt1 ).kmt_inpand( mode="horizontal", U=CNmt1,V=CNmt1 )
 	random    = BlankClip( InterleavedClip.SeparateFields(), color_yuv=$808080 ).AddGrainC( var=1800, uvar=ChromaNoise ? 1800 : 0 )
 	random    = InterleavedClip.IsYUY2() ? random.nonyuy2clipin(true) : random
 	varRandom = mt_makediff( noiseMax, noiseMin, U=CNmt1,V=CNmt1 ).mt_lutxy( random, "clamp_f_i8 x range_half - y * range_size / range_half +", U=CNmt1,V=CNmt1)
