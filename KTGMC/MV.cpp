@@ -701,8 +701,8 @@ public:
     , cuda(CreateKDeintCUDA())
   {
     // ¡‚ÌŠ‘Î‰ž‚µ‚Ä‚¢‚é‚ÌƒRƒŒ‚¾‚¯
-    if (nHPad != 8) env->ThrowError("[KMSuper] hpad must be 8.");
-    if (nVPad != 8) env->ThrowError("[KMSuper] vpad must be 8.");
+    // The padding is not restricted to 8, the size of the planes and the
+    // size of the super are computed with the padding of the parameters.
     if (nSharp != 2) env->ThrowError("[KMSuper] sharp must be 2.");
     if (nRfilter != 2) env->ThrowError("[KMSuper] rfilter must be 2.");
     if (nPel != 1 && nPel != 2) env->ThrowError("[KMSuper] pel must be 1 or 2");
@@ -2603,6 +2603,12 @@ public:
     }
 
     int nAnalyzeLevel = (lv > 0) ? lv : nLevelsMax + lv;
+    // The block grid can be too coarse for the level of the analysis, the
+    // MVTools analyse the finest level of the pyramid in that case.
+    if (nAnalyzeLevel < 1)
+    {
+      nAnalyzeLevel = 1;
+    }
     if (nAnalyzeLevel > params.nLevels)
     {
       env->ThrowError(
@@ -2610,8 +2616,7 @@ public:
         "while MAnalyse asks %d", params.nLevels, nAnalyzeLevel
       );
     }
-    if (nAnalyzeLevel < 1
-      || nAnalyzeLevel > nLevelsMax)
+    if (nAnalyzeLevel > nLevelsMax && nLevelsMax > 0)
     {
       env->ThrowError(
         "MAnalyse: non-valid number of levels (%d)", nAnalyzeLevel
