@@ -2930,6 +2930,7 @@ public:
 
   void Compensate(
     int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nPel, int nBitsPerPixel,
+    bool* enableYUV,
     int nTh1, int nTh2, int time256, int thSAD,
     const short* ovrwins, const short* overwinsUV,
     const VECTOR* mv,
@@ -3001,6 +3002,13 @@ public:
       int imgpitch = (p == 0) ? nImgPitchY : nImgPitchUV;
 
       // DegrainBlockDataçÏê¨
+      if (!enableYUV[p]) {
+        // the plane can not be compensated, copy it from the source
+        launch_elementwise<vpixel_t, vpixel_t, CopyFunction<vpixel_t>>(
+          (vpixel_t*)pDst[p], (const vpixel_t*)pSrc[p], width4, nHeight >> shift, pitch4, stream);
+        continue;
+      }
+
       (this->*prepare)(
         nBlkX, nBlkY, nPad >> shift, blksize, nTh2, time256, thSAD,
         (p == 0) ? ovrwins : overwinsUV,

@@ -4377,6 +4377,8 @@ class KMDegrainX : public GenericVideoFilter
 
   const int delta;
   const int YUVplanes;
+  // The super clip only has chroma planes when it was made with chroma=true.
+  bool superHasChroma;
 
   PClip super;
   PClip rawClipB[MAX_DEGRAIN];
@@ -4559,19 +4561,23 @@ class KMDegrainX : public GenericVideoFilter
         mvB[i] = mvClipB[i]->GetVectors(0);
         prefB[3 * i + 0] = static_cast<const KMPlane<pixel_t>*>(
           superB[i]->GetFrame(0)->GetYPlane())->GetAbsolutePelPointer(0, 0);
-        prefB[3 * i + 1] = static_cast<const KMPlane<pixel_t>*>(
-          superB[i]->GetFrame(0)->GetUPlane())->GetAbsolutePelPointer(0, 0);
-        prefB[3 * i + 2] = static_cast<const KMPlane<pixel_t>*>(
-          superB[i]->GetFrame(0)->GetVPlane())->GetAbsolutePelPointer(0, 0);
+        if (superHasChroma) {
+          prefB[3 * i + 1] = static_cast<const KMPlane<pixel_t>*>(
+            superB[i]->GetFrame(0)->GetUPlane())->GetAbsolutePelPointer(0, 0);
+          prefB[3 * i + 2] = static_cast<const KMPlane<pixel_t>*>(
+            superB[i]->GetFrame(0)->GetVPlane())->GetAbsolutePelPointer(0, 0);
+        }
       }
       if (isUsableF[i]) {
         mvF[i] = mvClipF[i]->GetVectors(0);
         prefF[3 * i + 0] = static_cast<const KMPlane<pixel_t>*>(
           superF[i]->GetFrame(0)->GetYPlane())->GetAbsolutePelPointer(0, 0);
-        prefF[3 * i + 1] = static_cast<const KMPlane<pixel_t>*>(
-          superF[i]->GetFrame(0)->GetUPlane())->GetAbsolutePelPointer(0, 0);
-        prefF[3 * i + 2] = static_cast<const KMPlane<pixel_t>*>(
-          superF[i]->GetFrame(0)->GetVPlane())->GetAbsolutePelPointer(0, 0);
+        if (superHasChroma) {
+          prefF[3 * i + 1] = static_cast<const KMPlane<pixel_t>*>(
+            superF[i]->GetFrame(0)->GetUPlane())->GetAbsolutePelPointer(0, 0);
+          prefF[3 * i + 2] = static_cast<const KMPlane<pixel_t>*>(
+            superF[i]->GetFrame(0)->GetVPlane())->GetAbsolutePelPointer(0, 0);
+        }
       }
     }
 
@@ -4601,8 +4607,8 @@ class KMDegrainX : public GenericVideoFilter
 
     bool enableYUV[] = {
       (YUVplanes & YPLANE) != 0,
-      (YUVplanes & UPLANE) != 0,
-      (YUVplanes & VPLANE) != 0
+      (YUVplanes & UPLANE) != 0 && superHasChroma,
+      (YUVplanes & VPLANE) != 0 && superHasChroma
     };
 
     int nTh1 = mvClipB[0]->GetThSCD1();
@@ -4642,6 +4648,7 @@ public:
     , params(KMVParam::GetParam(mvbw->GetVideoInfo(), env))
     , cuda(CreateKDeintCUDA())
     , delta(_delta)
+    , superHasChroma(KMVParam::GetParam(super->GetVideoInfo(), env)->chroma)
     , binomial(binomial)
     , useFlag(useFlag)
     , YUVplanes(_YUVplanes)
@@ -5076,6 +5083,9 @@ class KMCompensate : public GenericVideoFilter
   PClip super;
   PClip vectors;
 
+  // The super clip only has chroma planes when it was made with chroma=true.
+  bool superHasChroma;
+
   int time256;
   int thSAD;
 
@@ -5194,16 +5204,20 @@ class KMCompensate : public GenericVideoFilter
 
     for (int i = 0; i < 2; ++i) {
       auto yplane = static_cast<const KMPlane<pixel_t>*>(superFrame[i]->GetFrame(0)->GetYPlane());
-      auto uplane = static_cast<const KMPlane<pixel_t>*>(superFrame[i]->GetFrame(0)->GetUPlane());
-      auto vplane = static_cast<const KMPlane<pixel_t>*>(superFrame[i]->GetFrame(0)->GetVPlane());
 
       pref[3 * i + 0] = yplane->GetAbsolutePelPointer(0, 0);
-      pref[3 * i + 1] = uplane->GetAbsolutePelPointer(0, 0);
-      pref[3 * i + 2] = vplane->GetAbsolutePelPointer(0, 0);
+      if (superHasChroma) {
+        auto uplane = static_cast<const KMPlane<pixel_t>*>(superFrame[i]->GetFrame(0)->GetUPlane());
+        auto vplane = static_cast<const KMPlane<pixel_t>*>(superFrame[i]->GetFrame(0)->GetVPlane());
+        pref[3 * i + 1] = uplane->GetAbsolutePelPointer(0, 0);
+        pref[3 * i + 2] = vplane->GetAbsolutePelPointer(0, 0);
+      }
 
       if (i == 0) {
         pSrcYPlane = yplane;
-        pSrcUPlane = uplane;
+        pSrcUPlane = superHasChroma
+          ? static_cast<const KMPlane<pixel_t>*>(superFrame[i]->GetFrame(0)->GetUPlane())
+          : nullptr;
       }
     }
 
@@ -5236,12 +5250,17 @@ class KMCompensate : public GenericVideoFilter
     const short* ovrwinsUV = OverWinsUV->GetWindow(env);
 
     int nSuperPitchY = pSrcYPlane->GetPitch();
-    int nSuperPitchUV = pSrcUPlane->GetPitch();
+    int nSuperPitchUV = superHasChroma ? pSrcUPlane->GetPitch() : 0;
     int nImgPitchY = nSuperPitchY * pSrcYPlane->GetExtendedHeight();
-    int nImgPitchUV = nSuperPitchUV * pSrcUPlane->GetExtendedHeight();
+    int nImgPitchUV = superHasChroma ? (nSuperPitchUV * pSrcUPlane->GetExtendedHeight()) : 0;
+
+    // The chroma planes can only be compensated when the super has chroma
+    // planes, otherwise they are copied from the source.
+    bool enableYUV[] = { true, superHasChroma, superHasChroma };
 
     cuda->get(pixel_t())->Compensate(
       nWidth, nHeight, nBlkX, nBlkY, nPad, nBlkSize, nPel, nBitsPerPixel,
+      enableYUV,
       nTh1, nTh2, time256, thSAD,
       ovrwins, ovrwinsUV, mv,
       psrc, pdst, ptmp, pref,
@@ -5263,6 +5282,7 @@ public:
     , cuda(CreateKDeintCUDA())
     , super(_super)
     , vectors(vectors)
+    , superHasChroma(KMVParam::GetParam(_super->GetVideoInfo(), env)->chroma)
   {
     // TODO: super Ç∆ vectors Ç™çáívÇµÇƒÇÈÇ±Ç∆ÇämîF
 
