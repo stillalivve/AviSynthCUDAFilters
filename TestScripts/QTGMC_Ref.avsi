@@ -632,12 +632,12 @@ function QTGMC_Ref( clip Input, string "Preset", int "TR0", int "TR1", int "TR2"
 	ediSuper = (TR1 > 0 || temporalSL)   ? edi.MSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad ) : NOP()
 	bComp1   = (temporalSL)              ? edi.MCompensate( ediSuper, bVec1, thSCD1=ThSCD1,thSCD2=ThSCD2              ) : NOP()
 	fComp1   = (temporalSL)              ? edi.MCompensate( ediSuper, fVec1, thSCD1=ThSCD1,thSCD2=ThSCD2              ) : NOP()
-	tMax     = (temporalSL)              ? edi.mt_logic( fComp1, "max", U=3,V=3 ).mt_logic( bComp1, "max", U=3,V=3 )    : NOP()
-	tMin     = (temporalSL)              ? edi.mt_logic( fComp1, "min", U=3,V=3 ).mt_logic( bComp1, "min", U=3,V=3 )    : NOP()
+	tMax     = (temporalSL)              ? edi.kmt_logic( fComp1, "max", U=3,V=3 ).kmt_logic( bComp1, "max", U=3,V=3 )    : NOP()
+	tMin     = (temporalSL)              ? edi.kmt_logic( fComp1, "min", U=3,V=3 ).kmt_logic( bComp1, "min", U=3,V=3 )    : NOP()
 	bComp3   = (SLRad > 1 && temporalSL) ? edi.MCompensate( ediSuper, bVec3, thSCD1=ThSCD1,thSCD2=ThSCD2              ) : NOP()
 	fComp3   = (SLRad > 1 && temporalSL) ? edi.MCompensate( ediSuper, fVec3, thSCD1=ThSCD1,thSCD2=ThSCD2              ) : NOP()
-	tMax     = (SLRad > 1 && temporalSL) ? tMax.mt_logic( fComp3, "max", U=3,V=3 ).mt_logic( bComp3, "max", U=3,V=3 )   : tMax
-	tMin     = (SLRad > 1 && temporalSL) ? tMin.mt_logic( fComp3, "min", U=3,V=3 ).mt_logic( bComp3, "min", U=3,V=3 )   : tMin
+	tMax     = (SLRad > 1 && temporalSL) ? tMax.kmt_logic( fComp3, "max", U=3,V=3 ).kmt_logic( bComp3, "max", U=3,V=3 )   : tMax
+	tMin     = (SLRad > 1 && temporalSL) ? tMin.kmt_logic( fComp3, "min", U=3,V=3 ).kmt_logic( bComp3, "min", U=3,V=3 )   : tMin
 
 
 	#---------------------------------------
@@ -882,7 +882,7 @@ function QTGMC_Ref_inflate( clip c, int "Y", int "U", int "V" )
 	rgY = (mtY == 3) ? 20 : -1
 	rgU = (mtU == 3) ? 20 : -1
 	rgV = (mtV == 3) ? 20 : -1
-	mt_logic( c, c.RemoveGrain( rgY, rgU, rgV ), "max", Y=mtY,U=mtU,V=mtV )
+	kmt_logic( c, c.RemoveGrain( rgY, rgU, rgV ), "max", Y=mtY,U=mtU,V=mtV )
 }
 
 function QTGMC_Ref_deflate( clip c, int "Y", int "U", int "V" )
@@ -894,7 +894,7 @@ function QTGMC_Ref_deflate( clip c, int "Y", int "U", int "V" )
 	rgY = (mtY == 3) ? 20 : -1
 	rgU = (mtU == 3) ? 20 : -1
 	rgV = (mtV == 3) ? 20 : -1
-	mt_logic( c, c.RemoveGrain( rgY, rgU, rgV ), "min", Y=mtY,U=mtU,V=mtV )
+	kmt_logic( c, c.RemoveGrain( rgY, rgU, rgV ), "min", Y=mtY,U=mtU,V=mtV )
 }
 
 # Helper function: Compare processed clip with reference clip: only allow thin, horizontal areas of difference, i.e. bob shimmer fixes
