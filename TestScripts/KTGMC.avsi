@@ -640,11 +640,11 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	ediSuper = KTGMC_GetUserGlobal( GlobalNames, "ediSuper", ReuseGlobals )
 
 	# InputType=2,3: use motion mask to blend luma between original clip & reweaved clip based on ProgSADMask setting. Use chroma from original clip in any case
-	inputTypeBlend = (ProgSADMask > 0.0) ? MMask( srchClip, bVec1, kind=1, ml=ProgSADMask ) : NOP()
+	inputTypeBlend = (ProgSADMask > 0.0) ? KMotionMask( srchClip, bVec1, kind=1, ml=ProgSADMask ) : NOP()
 	edi = IsClip(edi) ? edi : (InputType != 2 && InputType != 3) ? (!yuy2 ? edi1 : edi1.nonyuy2clipin(true)) :\
 	      (ProgSADMask <= 0.0)               ? (!yuy2 ? edi1.KMergeChroma( innerClip, 1.0 ) : edi1.KMergeChroma( innerClip, 1.0 ).nonyuy2clipin(true)) : \
-	                                           (!yuy2 ? mt_merge( innerClip, edi1, inputTypeBlend, U=2,V=2 ) : \
-											            mt_merge( innerClip.nonyuy2clipin(true), edi1.nonyuy2clipin(true), inputTypeBlend, U=2,V=2 ))
+	                                           (!yuy2 ? KMergeMask( innerClip, edi1, inputTypeBlend, U=2,V=2 ) : \
+											            KMergeMask( innerClip.nonyuy2clipin(true), edi1.nonyuy2clipin(true), inputTypeBlend, U=2,V=2 ))
 
 	# Get the max/min value for each pixel over neighboring motion-compensated frames - used for temporal sharpness limiting
 	ediSuper = IsClip(ediSuper) ? ediSuper : (TR1 > 0 || temporalSL)   ? edi.KMSuper( pel=SubPel, sharp=SubPelInterp, levels=1, hpad=hpad, vpad=vpad ) : NOP()
@@ -779,10 +779,10 @@ function KTGMC( clip Input, string "Preset", int "TR0", int "TR1", int "TR2", in
 	sblur =      (ShutterBlur > 0) ? addNoise2.MFlowBlur( sblurSuper, sbBVec1, sbFVec1, blur=blurLevel, thSCD1=ThSCD1,thSCD2=ThSCD2 ) : NOP()
 
 	# Shutter motion blur - use motion mask to reduce blurring in areas of low motion - also helps reduce blur "bleeding" into static areas, then select blur type
-	sbMotionMask = (ShutterBlur > 0 && SBlurLimit > 0) ? MMask( srchClip, bVec1, kind=0, ml=SBlurLimit ) : NOP()
+	sbMotionMask = (ShutterBlur > 0 && SBlurLimit > 0) ? KMotionMask( srchClip, bVec1, kind=0, ml=SBlurLimit ) : NOP()
 	sblurred     = (ShutterBlur == 0) ? addNoise2 : \
 	               (SBlurLimit == 0)  ? sblur : \
-	                                    mt_merge( addNoise2, sblur, sbMotionMask, U=3,V=3 )
+	                                    KMergeMask( addNoise2, sblur, sbMotionMask, U=3,V=3 )
 	# Reduce frame rate
 	decimated = (FPSDivisor != 1) ? sblurred.SelectEvery( FPSDivisor, 0 ) : sblurred
 

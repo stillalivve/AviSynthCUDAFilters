@@ -17,6 +17,7 @@
 
 void AddFuncKernel(IScriptEnvironment* env);
 void AddFuncMV(IScriptEnvironment* env);
+void AddFuncMotionMask(IScriptEnvironment* env);
 
 static void init_console()
 {
@@ -79,6 +80,7 @@ extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(IScri
 
   AddFuncKernel(env);
   AddFuncMV(env);
+  AddFuncMotionMask(env);
 
   return "CUDA Accelerated QTGMC Plugin";
 }

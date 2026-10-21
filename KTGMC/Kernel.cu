@@ -3674,6 +3674,105 @@ public:
       env);
   }
 };
+// ---------------------------------------------------------------------------
+// KMergeMask: merge two clips with a mask, the CUDA version of the masktools
+// mt_merge filter.  The mask is taken from the luma plane of the third clip,
+// the chroma planes are copied from the first clip (mt_merge with U=2, V=2).
+// ---------------------------------------------------------------------------
+template <typename pixel_t>
+__global__ void kl_merge_mask(
+  pixel_t* dst, const pixel_t* src0, const pixel_t* src1, const pixel_t* mask,
+  int width, int height, int pitch, int maxval)
+{
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+  if (x < width && y < height) {
+    int m = mask[x + y * pitch];
+    if (sizeof(pixel_t) == 1) {
+      if (m == 255) {
+        dst[x + y * pitch] = src1[x + y * pitch];
+      }
+      else if (m != 0) {
+        dst[x + y * pitch] = (pixel_t)(((256 - m) * (int)src0[x + y * pitch] + m * (int)src1[x + y * pitch] + 128) >> 8);
+      }
+      // m == 0: keep src0
+    }
+    else {
+      if (m == maxval) {
+        dst[x + y * pitch] = src1[x + y * pitch];
+      }
+      else if (m != 0) {
+        dst[x + y * pitch] = (pixel_t)(((int64_t)src0[x + y * pitch] * (maxval - m) + (int64_t)src1[x + y * pitch] * m + maxval / 2) / maxval);
+      }
+      // m == 0: keep src0
+    }
+  }
+}
+
+class KMergeMask : public KMasktoolFilterBase
+{
+  int maxval;
+
+  template <typename pixel_t>
+  void ProcPlane_(pixel_t* pDst,
+    const pixel_t* pSrc0, const pixel_t* pSrc1, const pixel_t* pSrc2,
+    int width, int height, int pitch, PNeoEnv env)
+  {
+    cudaStream_t stream = static_cast<cudaStream_t>(env->GetDeviceStream());
+
+    dim3 threads(32, 16);
+    dim3 blocks(nblocks(width, threads.x), nblocks(height, threads.y));
+
+    kl_merge_mask<pixel_t><<<blocks, threads, 0, stream>>>(
+      pDst, pSrc0, pSrc1, pSrc2, width, height, pitch, maxval);
+    DEBUG_SYNC;
+  }
+
+protected:
+  virtual void ProcPlane(int p, uint8_t* pDst,
+    const uint8_t* pSrc0, const uint8_t* pSrc1, const uint8_t* pSrc2, const uint8_t* pSrc3,
+    int width, int height, int pitch, PNeoEnv env) override
+  {
+    ProcPlane_(pDst, pSrc0, pSrc1, pSrc2, width, height, pitch, env);
+  }
+
+  virtual void ProcPlane(int p, uint16_t* pDst,
+    const uint16_t* pSrc0, const uint16_t* pSrc1, const uint16_t* pSrc2, const uint16_t* pSrc3,
+    int width, int height, int pitch, PNeoEnv env) override
+  {
+    ProcPlane_(pDst, pSrc0, pSrc1, pSrc2, width, height, pitch, env);
+  }
+
+public:
+  KMergeMask(PClip src0, PClip src1, PClip mask, int Y, int U, int V, IScriptEnvironment* env_)
+    : KMasktoolFilterBase(src0, src1, mask, Y, U, V, env_)
+    , maxval((1 << vi.BitsPerComponent()) - 1)
+  {
+    VideoInfo vi1 = src1->GetVideoInfo();
+    VideoInfo vi2 = mask->GetVideoInfo();
+    if (vi1.width != vi.width || vi1.height != vi.height) {
+      env_->ThrowError("KMergeMask: clips should have the same size");
+    }
+    if (vi2.width != vi.width || vi2.height != vi.height) {
+      env_->ThrowError("KMergeMask: clips should have the same size");
+    }
+    if (vi1.pixel_type != vi.pixel_type || vi2.pixel_type != vi.pixel_type) {
+      env_->ThrowError("KMergeMask: clips should have the same format");
+    }
+  }
+
+  static AVSValue __cdecl Create(AVSValue args, void* user_data, IScriptEnvironment* env) {
+    return new KMergeMask(
+      args[0].AsClip(),
+      args[1].AsClip(),
+      args[2].AsClip(),
+      args[3].AsInt(3),
+      args[4].AsInt(2),
+      args[5].AsInt(2),
+      env);
+  }
+};
 void AddFuncKernel(IScriptEnvironment* env)
 {
   env->AddFunction("KTGMC_Bob", "c[b]f[c]f", KTGMC_Bob::Create, 0);
@@ -3683,6 +3782,7 @@ void AddFuncKernel(IScriptEnvironment* env)
   env->AddFunction("KVerticalCleaner", "c[mode]i[modeU]i[modeV]i", KVerticalCleaner::Create, 0);
   env->AddFunction("KClamp", "ccc[overshoot]i[undershoot]i[y]i[u]i[v]i", KClamp::Create, 0);
   env->AddFunction("KBlur", "c[horizontal]i[vertical]i", KBlur::Create, 0);
+  env->AddFunction("KMergeMask", "ccc[y]i[u]i[v]i", KMergeMask::Create, 0);
   env->AddFunction("KGaussResize", "c[p]f[chroma]b", KGaussResize::Create, 0);
 
   env->AddFunction("KInpandVerticalX2", "c[y]i[u]i[v]i", KXpandVerticalX2<Min5>::Create, 0);
