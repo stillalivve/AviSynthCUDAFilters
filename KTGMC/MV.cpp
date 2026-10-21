@@ -4627,7 +4627,8 @@ class KMDegrainX : public GenericVideoFilter
     int nImgPitchUV = (pSrcUPlane ? (nSuperPitchUV * pSrcUPlane->GetExtendedHeight()) : 0);
 
     cuda->get(pixel_t())->Degrain(
-      delta, nWidth, nHeight, nBlkX, nBlkY, nPad, nBlkSize, nPel, nBitsPerPixel,
+      delta, nWidth, nHeight, nBlkX, nBlkY, nPad, nBlkSize,
+      params->nOverlapX, params->nOverlapY, nPel, nBitsPerPixel,
       enableYUV, isUsableB, isUsableF,
       nTh1, nTh2, thSAD, thSADC, binomial,
       ovrwins, ovrwinsUV,
@@ -5263,7 +5264,8 @@ class KMCompensate : public GenericVideoFilter
     bool enableYUV[] = { true, superHasChroma, superHasChroma };
 
     cuda->get(pixel_t())->Compensate(
-      nWidth, nHeight, nBlkX, nBlkY, nPad, nBlkSize, nPel, nBitsPerPixel,
+      nWidth, nHeight, nBlkX, nBlkY, nPad, nBlkSize,
+      params->nOverlapX, params->nOverlapY, nPel, nBitsPerPixel,
       enableYUV,
       nTh1, nTh2, time256, thSAD,
       ovrwins, ovrwinsUV, mv,

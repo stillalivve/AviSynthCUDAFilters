@@ -1694,7 +1694,7 @@ static __device__ void dev_norm_weights(int &WSrc, int *WRefB, int *WRefF)
 
 template <typename pixel_t, typename vpixel_t, int N, int NPEL, int SHIFT, bool BINOMIAL>
 static __global__ void kl_prepare_degrain(
-  int nBlkX, int nBlkY, int nPad, int nBlkSize, int nTh2, int thSAD,
+  int nBlkX, int nBlkY, int nPad, int nBlkSize, int nStepX, int nStepY, int nTh2, int thSAD,
   const short* ovrwins,
   const int * __restrict__ sceneChangeB,
   const int * __restrict__ sceneChangeF,
@@ -1727,9 +1727,8 @@ static __global__ void kl_prepare_degrain(
     int wbx = (blkx + nBlkX - 3) / (nBlkX - 2);
     b.winOver = ovrwins + (wby + wbx) * nBlkSize * nBlkSize;
 
-    int blkStep = nBlkSize / 2;
-    int offx = blkx * blkStep;
-    int offy = blky * blkStep;
+    int offx = blkx * nStepX;
+    int offy = blky * nStepY;
     int offxS = nPad + offx;
     int offyS = nPad + offy;
     int offset = offx + offy * nPitch;
@@ -1788,20 +1787,16 @@ static __global__ void kl_prepare_degrain(
 template <typename pixel_t, typename vpixel_t, typename vtmp_t, typename vint_t, typename vshort_t, int N, int BLK_SIZE, int M>
 static __global__ void kl_degrain_2x3(
   int nPatternX, int nPatternY,
-  int nBlkX, int nBlkY, DegrainBlock<pixel_t, N>* data, vtmp_t* pDst, int pitch4, int pitchsuper4
+  int nBlkX, int nBlkY, int nStepX, int nStepY, int nWidthLimit, int nHeightLimit,
+  DegrainBlock<pixel_t, N>* data, vtmp_t* pDst, int pitch4, int pitchsuper4
 )
 {
   enum {
     VLEN = VHelper<vtmp_t>::VLEN,
     SPAN_X = 3,
     SPAN_Y = 2,
-    BLK_STEP = BLK_SIZE / 2,
     BLK_SIZE4 = BLK_SIZE / VLEN,
-    BLK_STEP4 = BLK_STEP / VLEN,
     THREADS = BLK_SIZE*BLK_SIZE4,
-    TMP_W = BLK_SIZE + BLK_STEP * 2, // == BLK_SIZE * 2
-    TMP_H = BLK_SIZE + BLK_STEP * 1,
-    TMP_W4 = TMP_W / VLEN,
     N_READ_LOOP = DegrainBlock<pixel_t, N>::LEN / THREADS
   };
 
@@ -1813,16 +1808,20 @@ static __global__ void kl_degrain_2x3(
   int offset = (tx + ty * pitch4) * VLEN;
   int offsetSuper = (tx + ty * pitchsuper4) * VLEN;
 
-  __shared__ vtmp_t tmp[M][TMP_H][TMP_W4];
+  const int nStepX4 = nStepX / VLEN;
+  const int TMP_W4 = 2 * nStepX4 + BLK_SIZE4;
+  const int TMP_H = BLK_SIZE + nStepY;
+
+  extern __shared__ char smem_raw[];
+  vtmp_t* tmp = reinterpret_cast<vtmp_t*>(((size_t)smem_raw + 15) & ~(size_t)15);
   __shared__ DegrainBlock<pixel_t, N> info_[M];
   DegrainBlock<pixel_t, N>& info = info_[tz];
 
   // tmp初期化
-  tmp[tz][ty][tx] = VHelper<vtmp_t>::make(0);
-  tmp[tz][ty][tx + BLK_SIZE4] = VHelper<vtmp_t>::make(0);
-  if (ty < BLK_STEP) {
-    tmp[tz][ty + BLK_SIZE][tx] = VHelper<vtmp_t>::make(0);
-    tmp[tz][ty + BLK_SIZE][tx + BLK_SIZE4] = VHelper<vtmp_t>::make(0);
+  for (int y = ty; y < TMP_H; y += BLK_SIZE) {
+    for (int x = tx; x < TMP_W4; x += BLK_SIZE4) {
+      tmp[(tz * TMP_H + y) * TMP_W4 + x] = VHelper<vtmp_t>::make(0);
+    }
   }
 
   __syncthreads();
@@ -1869,15 +1868,15 @@ static __global__ void kl_degrain_2x3(
                  VLoad<VLEN>::to_int(&info.d.pB[i][offsetSuper]) * info.d.WRefB[i];
         }
 
-        int dstx = bbx * BLK_STEP4 + tx;
-        int dsty = bby * BLK_STEP + ty;
+        int dstx = bbx * nStepX4 + tx;
+        int dsty = bby * nStepY + ty;
 
         val = (val + (no_need_round ? 0 : 128)) >> 8;
 
         if (sizeof(pixel_t) == 1)
-          tmp[tz][dsty][dstx] += (val * __ldg(&((const vshort_t*)info.d.winOver)[tid]) + 256) >> 6; // shift 5 in Short2Bytes<uint8_t> in overlap.cpp
+          tmp[(tz * TMP_H + dsty) * TMP_W4 + dstx] += (val * __ldg(&((const vshort_t*)info.d.winOver)[tid]) + 256) >> 6; // shift 5 in Short2Bytes<uint8_t> in overlap.cpp
         else
-          tmp[tz][dsty][dstx] += val * __ldg(&((const vshort_t*)info.d.winOver)[tid]); // shift (5+6); in Short2Bytes16
+          tmp[(tz * TMP_H + dsty) * TMP_W4 + dstx] += val * __ldg(&((const vshort_t*)info.d.winOver)[tid]); // shift (5+6); in Short2Bytes16
       }
       __syncthreads();
 #if 0
@@ -1895,26 +1894,18 @@ static __global__ void kl_degrain_2x3(
 }
 
   // dstに書き込む
-  vtmp_t *p = &pDst[basex * BLK_STEP4 + tx + (basey * BLK_STEP + ty) * pitch4];
 #if 0
   if (basex == 0 && basey == 0 && tx == 0 && ty == 0) {
     printf("%d\n", tmp[0][0][0].x);
   }
 #endif
-  int bsx = tx / BLK_STEP4 - 1;
-  int bsy = ty / BLK_STEP - 1;
-  if (basex + bsx < nBlkX && basey + bsy < nBlkY) {
-    p[0] += tmp[tz][ty][tx];
-    if (basex + bsx + 2 < nBlkX) {
-      p[BLK_SIZE4] += tmp[tz][ty][tx + BLK_SIZE4];
-    }
-    if (ty < BLK_STEP) {
-      if (basey + bsy + 2 < nBlkY) {
-        p[BLK_SIZE * pitch4] += tmp[tz][ty + BLK_SIZE][tx];
-        if (basex + bsx + 2 < nBlkX) {
-          p[BLK_SIZE4 + BLK_SIZE * pitch4] += tmp[tz][ty + BLK_SIZE][tx + BLK_SIZE4];
-        }
-      }
+  for (int y = ty; y < TMP_H; y += BLK_SIZE) {
+    int gy = basey * nStepY + y;
+    if (gy >= nHeightLimit) continue;
+    for (int x = tx; x < TMP_W4; x += BLK_SIZE4) {
+      int gx = basex * nStepX4 + x;
+      if (gx >= nWidthLimit) continue;
+      pDst[gx + gy * pitch4] += tmp[(tz * TMP_H + y) * TMP_W4 + x];
     }
   }
 }
@@ -1952,7 +1943,7 @@ union CompensateBlock {
 
 template <typename pixel_t, int NPEL, int SHIFT>
 static __global__ void kl_prepare_compensate(
-  int nBlkX, int nBlkY, int nPad, int nBlkSize, int nTh2, int time256, int thSAD,
+  int nBlkX, int nBlkY, int nPad, int nBlkSize, int nStepX, int nStepY, int nTh2, int time256, int thSAD,
   const short* ovrwins,
   const int * __restrict__ sceneChange,
   const VECTOR *mv,
@@ -1976,9 +1967,8 @@ static __global__ void kl_prepare_compensate(
     int wbx = (blkx + nBlkX - 3) / (nBlkX - 2);
     b.winOver = ovrwins + (wby + wbx) * nBlkSize * nBlkSize;
 
-    int blkStep = nBlkSize / 2;
-    int offxS = nPad + blkx * blkStep;
-    int offyS = nPad + blky * blkStep;
+    int offxS = nPad + blkx * nStepX;
+    int offyS = nPad + blky * nStepY;
     int offsetS = offxS + offyS * nPitchSuper;
 
     if (!(*sceneChange > nTh2)) {
@@ -2004,6 +1994,7 @@ static __global__ void kl_prepare_compensate(
 template <typename pixel_t, typename vtmp_t, typename vint_t, typename vshort_t, int BLK_SIZE, int M>
 static __global__ void kl_compensate_2x3(
   int nPatternX, int nPatternY, int nBlkX, int nBlkY,
+  int nStepX, int nStepY, int nWidthLimit, int nHeightLimit,
   CompensateBlock<pixel_t>* __restrict__ data,
   vtmp_t* pDst, int pitch4, int pitchsuper4
 )
@@ -2012,13 +2003,8 @@ static __global__ void kl_compensate_2x3(
     VLEN = VHelper<vtmp_t>::VLEN,
     SPAN_X = 3,
     SPAN_Y = 2,
-    BLK_STEP = BLK_SIZE / 2,
     BLK_SIZE4 = BLK_SIZE / VLEN,
-    BLK_STEP4 = BLK_STEP / VLEN,
     THREADS = BLK_SIZE*BLK_SIZE4,
-    TMP_W = BLK_SIZE + BLK_STEP * 2, // == BLK_SIZE * 2
-    TMP_H = BLK_SIZE + BLK_STEP * 1,
-    TMP_W4 = TMP_W / VLEN,
     N_READ_LOOP = CompensateBlock<pixel_t>::LEN / THREADS
   };
 
@@ -2029,17 +2015,21 @@ static __global__ void kl_compensate_2x3(
   int tid = tx + ty * BLK_SIZE4;
   int offsetSuper = (tx + ty * pitchsuper4) * VLEN;
 
-  __shared__ vtmp_t tmp[M][TMP_H][TMP_W4];
+  const int nStepX4 = nStepX / VLEN;
+  const int TMP_W4 = 2 * nStepX4 + BLK_SIZE4;
+  const int TMP_H = BLK_SIZE + nStepY;
+
+  extern __shared__ char smem_raw[];
+  vtmp_t* tmp = reinterpret_cast<vtmp_t*>(((size_t)smem_raw + 15) & ~(size_t)15);
   __shared__ CompensateBlock<pixel_t> info_[M];
   __shared__ bool isCopySrc;
   CompensateBlock<pixel_t>& info = info_[tz];
 
   // tmp初期化
-  tmp[tz][ty][tx] = VHelper<vtmp_t>::make(0);
-  tmp[tz][ty][tx + BLK_SIZE4] = VHelper<vtmp_t>::make(0);
-  if (ty < BLK_STEP) {
-    tmp[tz][ty + BLK_SIZE][tx] = VHelper<vtmp_t>::make(0);
-    tmp[tz][ty + BLK_SIZE][tx + BLK_SIZE4] = VHelper<vtmp_t>::make(0);
+  for (int y = ty; y < TMP_H; y += BLK_SIZE) {
+    for (int x = tx; x < TMP_W4; x += BLK_SIZE4) {
+      tmp[(tz * TMP_H + y) * TMP_W4 + x] = VHelper<vtmp_t>::make(0);
+    }
   }
 
   if (tid == 0 && tz == 0) {
@@ -2089,13 +2079,13 @@ static __global__ void kl_compensate_2x3(
       if (M == 1 || bx < nBlkX) {
         vint_t val = VLoad<VLEN>::to_int(&info.d.pRef[offsetSuper]);
 
-        int dstx = bbx * BLK_STEP4 + tx;
-        int dsty = bby * BLK_STEP + ty;
+        int dstx = bbx * nStepX4 + tx;
+        int dsty = bby * nStepY + ty;
 
         if (sizeof(pixel_t) == 1)
-          tmp[tz][dsty][dstx] += (val * __ldg(&((const vshort_t*)info.d.winOver)[tid]) + 256) >> 6; // shift 5 in Short2Bytes<uint8_t> in overlap.cpp
+          tmp[(tz * TMP_H + dsty) * TMP_W4 + dstx] += (val * __ldg(&((const vshort_t*)info.d.winOver)[tid]) + 256) >> 6; // shift 5 in Short2Bytes<uint8_t> in overlap.cpp
         else
-          tmp[tz][dsty][dstx] += val * __ldg(&((const vshort_t*)info.d.winOver)[tid]); // shift (5+6); in Short2Bytes16
+          tmp[(tz * TMP_H + dsty) * TMP_W4 + dstx] += val * __ldg(&((const vshort_t*)info.d.winOver)[tid]); // shift (5+6); in Short2Bytes16
       }
       __syncthreads();
 #if 0
@@ -2109,26 +2099,18 @@ static __global__ void kl_compensate_2x3(
 }
 
   // dstに書き込む
-  vtmp_t *p = &pDst[basex * BLK_STEP4 + tx + (basey * BLK_STEP + ty) * pitch4];
 #if 0
   if (basex == 0 && basey == 0 && tx == 0 && ty == 0) {
     printf("%d\n", tmp[0][0][0].x);
   }
 #endif
-  int bsx = tx / BLK_STEP4 - 1;
-  int bsy = ty / BLK_STEP - 1;
-  if (basex + bsx < nBlkX && basey + bsy < nBlkY) {
-    p[0] += tmp[tz][ty][tx];
-    if (basex + bsx + 2 < nBlkX) {
-      p[BLK_SIZE4] += tmp[tz][ty][tx + BLK_SIZE4];
-    }
-    if (ty < BLK_STEP) {
-      if (basey + bsy + 2 < nBlkY) {
-        p[BLK_SIZE * pitch4] += tmp[tz][ty + BLK_SIZE][tx];
-        if (basex + bsx + 2 < nBlkX) {
-          p[BLK_SIZE4 + BLK_SIZE * pitch4] += tmp[tz][ty + BLK_SIZE][tx + BLK_SIZE4];
-        }
-      }
+  for (int y = ty; y < TMP_H; y += BLK_SIZE) {
+    int gy = basey * nStepY + y;
+    if (gy >= nHeightLimit) continue;
+    for (int x = tx; x < TMP_W4; x += BLK_SIZE4) {
+      int gx = basex * nStepX4 + x;
+      if (gx >= nWidthLimit) continue;
+      pDst[gx + gy * pitch4] += tmp[(tz * TMP_H + y) * TMP_W4 + x];
     }
   }
 }
@@ -2549,7 +2531,7 @@ public:
 
   template <typename vpixel_t, int N, int NPEL, int SHIFT, bool BINOMIAL>
   void launch_prepare_degrain(
-    int nBlkX, int nBlkY, int nPad, int nBlkSize, int nTh2, int thSAD,
+    int nBlkX, int nBlkY, int nPad, int nBlkSize, int nStepX, int nStepY, int nTh2, int thSAD,
     const short* ovrwins,
     const int * sceneChangeB,
     const int * sceneChangeF,
@@ -2560,31 +2542,35 @@ public:
     dim3 threads(32, 8);
     dim3 blocks(nblocks(nBlkX, threads.x), nblocks(nBlkY, threads.y));
     kl_prepare_degrain<pixel_t, vpixel_t, N, NPEL, SHIFT, BINOMIAL> << <blocks, threads, 0, stream >> > (
-      nBlkX, nBlkY, nPad, nBlkSize, nTh2, thSAD, ovrwins, sceneChangeB, sceneChangeF, parg, pblocks, nPitch, nPitchSuper, nImgPitch);
+      nBlkX, nBlkY, nPad, nBlkSize, nStepX, nStepY, nTh2, thSAD, ovrwins, sceneChangeB, sceneChangeF, parg, pblocks, nPitch, nPitchSuper, nImgPitch);
     DEBUG_SYNC;
   }
 
   template <int N, int BLK_SIZE, int M>
   void launch_degrain_2x3_small(
     int nPatternX, int nPatternY,
-    int nBlkX, int nBlkY, DegrainBlock<pixel_t, N>* data, tmp_t* pDst, int pitch, int pitchsuper)
+    int nBlkX, int nBlkY, int nStepX, int nStepY, int nWidthLimit, int nHeightLimit,
+    DegrainBlock<pixel_t, N>* data, tmp_t* pDst, int pitch, int pitchsuper)
   {
     dim3 threads(BLK_SIZE, BLK_SIZE, M);
     dim3 blocks(nblocks(nBlkX, 3 * 2 * M), nblocks(nBlkY, 2 * 2));
-    kl_degrain_2x3<pixel_t, pixel_t, tmp_t, int, short, N, BLK_SIZE, M> << <blocks, threads, 0, stream >> > (
-      nPatternX, nPatternY, nBlkX, nBlkY, data, pDst, pitch, pitchsuper);
+    size_t shmem = (size_t)M * (BLK_SIZE + nStepY) * (2 * nStepX + BLK_SIZE) * sizeof(tmp_t) + 16;
+    kl_degrain_2x3<pixel_t, pixel_t, tmp_t, int, short, N, BLK_SIZE, M> << <blocks, threads, shmem, stream >> > (
+      nPatternX, nPatternY, nBlkX, nBlkY, nStepX, nStepY, nWidthLimit, nHeightLimit, data, pDst, pitch, pitchsuper);
     DEBUG_SYNC;
   }
 
   template <int N, int BLK_SIZE, int M>
   void launch_degrain_2x3(
     int nPatternX, int nPatternY,
-    int nBlkX, int nBlkY, DegrainBlock<pixel_t, N>* data, tmp_t* pDst, int pitch4, int pitchsuper4)
+    int nBlkX, int nBlkY, int nStepX, int nStepY, int nWidthLimit, int nHeightLimit,
+    DegrainBlock<pixel_t, N>* data, tmp_t* pDst, int pitch4, int pitchsuper4)
   {
     dim3 threads(BLK_SIZE / 4, BLK_SIZE, M);
     dim3 blocks(nblocks(nBlkX, 3 * 2 * M), nblocks(nBlkY, 2 * 2));
-    kl_degrain_2x3<pixel_t, vpixel_t, vtmp_t, int4, short4, N, BLK_SIZE, M> << <blocks, threads, 0, stream >> > (
-      nPatternX, nPatternY, nBlkX, nBlkY, data, (vtmp_t*)pDst, pitch4, pitchsuper4);
+    size_t shmem = (size_t)M * (BLK_SIZE + nStepY) * (2 * (nStepX / 4) + BLK_SIZE / 4) * sizeof(vtmp_t) + 16;
+    kl_degrain_2x3<pixel_t, vpixel_t, vtmp_t, int4, short4, N, BLK_SIZE, M> << <blocks, threads, shmem, stream >> > (
+      nPatternX, nPatternY, nBlkX, nBlkY, nStepX, nStepY, nWidthLimit, nHeightLimit, data, (vtmp_t*)pDst, pitch4, pitchsuper4);
     DEBUG_SYNC;
   }
 
@@ -2601,7 +2587,7 @@ public:
 
   typedef void (Me::*DEGRAINN)(
     int nWidth, int nHeight,
-    int nBlkX, int nBlkY, int nPad, int nBlkSize, int nPel, int nBitsPerPixel,
+    int nBlkX, int nBlkY, int nPad, int nBlkSize, int nOverlapX, int nOverlapY, int nPel, int nBitsPerPixel,
     bool* enableYUV, bool* isUsableB, bool* isUsableF,
     int nTh1, int nTh2, int thSAD, int thSADC, bool binomial,
     const short* ovrwins, const short* overwinsUV,
@@ -2615,7 +2601,7 @@ public:
   template <int N>
   void DegrainN(
     int nWidth, int nHeight,
-    int nBlkX, int nBlkY, int nPad, int nBlkSize, int nPel, int nBitsPerPixel,
+    int nBlkX, int nBlkY, int nPad, int nBlkSize, int nOverlapX, int nOverlapY, int nPel, int nBitsPerPixel,
     bool* enableYUV, bool* isUsableB, bool* isUsableF,
     int nTh1, int nTh2, int thSAD, int thSADC, bool binomial,
     const short* ovrwins, const short* overwinsUV,
@@ -2626,9 +2612,8 @@ public:
   )
   {
 
-    int nOverlap = nBlkSize / 2;
-    int nWidth_B = nBlkX*(nBlkSize - nOverlap) + nOverlap;
-    int nHeight_B = nBlkY*(nBlkSize - nOverlap) + nOverlap;
+    int nWidth_B = nBlkX*(nBlkSize - nOverlapX) + nOverlapX;
+    int nHeight_B = nBlkY*(nBlkSize - nOverlapY) + nOverlapY;
 
     // degrainarg作成
     DegrainArg<pixel_t, N> *hargs = new DegrainArg<pixel_t, N>[3];
@@ -2661,7 +2646,7 @@ public:
     }, hargs);
 
     typedef void (Me::*PREPARE)(
-      int nBlkX, int nBlkY, int nPad, int nBlkSize, int nTh2, int thSAD,
+      int nBlkX, int nBlkY, int nPad, int nBlkSize, int nStepX, int nStepY, int nTh2, int thSAD,
       const short* ovrwins,
       const int * sceneChangeB,
       const int * sceneChangeF,
@@ -2705,6 +2690,10 @@ public:
       PREPARE prepare = (p == 0) ? prepare_func : prepareuv_func;
       int shift = (p == 0) ? 0 : 1;
       int blksize = nBlkSize >> shift;
+      int overlapX = nOverlapX >> shift;
+      int overlapY = nOverlapY >> shift;
+      int stepX = blksize - overlapX;
+      int stepY = blksize - overlapY;
       int width = nWidth >> shift;
       int width_b = nWidth_B >> shift;
       int width4 = width / 4;
@@ -2721,7 +2710,7 @@ public:
 
         // DegrainBlockData作成
         (this->*prepare)(
-          nBlkX, nBlkY, nPad >> shift, blksize, nTh2,
+          nBlkX, nBlkY, nPad >> shift, blksize, stepX, stepY, nTh2,
           (p == 0) ? thSAD : thSADC,
           (p == 0) ? ovrwins : overwinsUV,
           sceneChangeB, sceneChangeF, &dargs[p],
@@ -2734,10 +2723,12 @@ public:
 
         void(Me::*degrain_func)(
           int nPatternX, int nPatternY,
-          int nBlkX, int nBlkY, DegrainBlock<pixel_t, N>* data, tmp_t* pDst, int pitchX, int pitchsuperX);
+          int nBlkX, int nBlkY, int nStepX, int nStepY, int nWidthLimit, int nHeightLimit,
+          DegrainBlock<pixel_t, N>* data, tmp_t* pDst, int pitchX, int pitchsuperX);
 
+        bool useScalar = (blksize < 8) || (stepX % 4 != 0);
         int pitchX, pitchsuperX;
-        if (blksize < 8) {
+        if (useScalar) {
           pitchX = pitch;
           pitchsuperX = pitchsuper;
         }
@@ -2745,29 +2736,31 @@ public:
           pitchX = pitch4;
           pitchsuperX = pitchsuper4;
         }
+        int widthLimit = useScalar ? width_b : width_b4;
+        int heightLimit = height_b;
 
         switch (blksize) {
         case 4:
           degrain_func = &Me::launch_degrain_2x3_small<N, 4, 8>;  // 4x4x16  = 128threads
           break;
         case 8:
-          degrain_func = &Me::launch_degrain_2x3<N, 8, 8>;  // 8x2x8  = 128threads
+          degrain_func = useScalar ? &Me::launch_degrain_2x3_small<N, 8, 8> : &Me::launch_degrain_2x3<N, 8, 8>;  // 8x2x8  = 128threads
           break;
         case 16:
-          degrain_func = &Me::launch_degrain_2x3<N, 16, 1>; // 16x4x1 =  64threads
+          degrain_func = useScalar ? &Me::launch_degrain_2x3_small<N, 16, 1> : &Me::launch_degrain_2x3<N, 16, 1>; // 16x4x1 =  64threads
           break;
         case 32:
-          degrain_func = &Me::launch_degrain_2x3<N, 32, 1>; // 32x8x1 = 256threads
+          degrain_func = useScalar ? &Me::launch_degrain_2x3_small<N, 32, 1> : &Me::launch_degrain_2x3<N, 32, 1>; // 32x8x1 = 256threads
           break;
         default:
           env->ThrowError("[Degrain] 未対応ブロックサイズ");
         }
 
         // 4回カーネル呼び出し
-        (this->*degrain_func)(0, 0, nBlkX, nBlkY, degrainblocks, pTmp[p], pitchX, pitchsuperX);
-        (this->*degrain_func)(1, 0, nBlkX, nBlkY, degrainblocks, pTmp[p], pitchX, pitchsuperX);
-        (this->*degrain_func)(0, 1, nBlkX, nBlkY, degrainblocks, pTmp[p], pitchX, pitchsuperX);
-        (this->*degrain_func)(1, 1, nBlkX, nBlkY, degrainblocks, pTmp[p], pitchX, pitchsuperX);
+        (this->*degrain_func)(0, 0, nBlkX, nBlkY, stepX, stepY, widthLimit, heightLimit, degrainblocks, pTmp[p], pitchX, pitchsuperX);
+        (this->*degrain_func)(1, 0, nBlkX, nBlkY, stepX, stepY, widthLimit, heightLimit, degrainblocks, pTmp[p], pitchX, pitchsuperX);
+        (this->*degrain_func)(0, 1, nBlkX, nBlkY, stepX, stepY, widthLimit, heightLimit, degrainblocks, pTmp[p], pitchX, pitchsuperX);
+        (this->*degrain_func)(1, 1, nBlkX, nBlkY, stepX, stepY, widthLimit, heightLimit, degrainblocks, pTmp[p], pitchX, pitchsuperX);
 
         // tmp_t -> pixel_t 変換
         launch_short_to_byte<vpixel_t, vtmp_t>(
@@ -2804,7 +2797,7 @@ public:
   }
 
   void Degrain(
-    int N, int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nPel, int nBitsPerPixel,
+    int N, int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nOverlapX, int nOverlapY, int nPel, int nBitsPerPixel,
     bool* enableYUV,
     bool* isUsableB, bool* isUsableF,
     int nTh1, int nTh2, int thSAD, int thSADC, bool binomial,
@@ -2861,7 +2854,7 @@ public:
     }
 
     (this->*degrain)(
-      nWidth, nHeight, nBlkX, nBlkY, nPad, nBlkSize, nPel, nBitsPerPixel,
+      nWidth, nHeight, nBlkX, nBlkY, nPad, nBlkSize, nOverlapX, nOverlapY, nPel, nBitsPerPixel,
       enableYUV, isUsableB, isUsableF,
       nTh1, nTh2, thSAD, thSADC, binomial,
       ovrwins, overwinsUV, mvB, mvF,
@@ -2876,7 +2869,7 @@ public:
 
   template <int NPEL, int SHIFT>
   void launch_prepare_compensate(
-    int nBlkX, int nBlkY, int nPad, int nBlkSize, int nTh2, int time256, int thSAD,
+    int nBlkX, int nBlkY, int nPad, int nBlkSize, int nStepX, int nStepY, int nTh2, int time256, int thSAD,
     const short* ovrwins,
     const int * __restrict__ sceneChange,
     const VECTOR *mv,
@@ -2888,7 +2881,7 @@ public:
     dim3 threads(32, 8);
     dim3 blocks(nblocks(nBlkX, threads.x), nblocks(nBlkY, threads.y));
     kl_prepare_compensate<pixel_t, NPEL, SHIFT> << <blocks, threads, 0, stream >> > (
-      nBlkX, nBlkY, nPad, nBlkSize, nTh2, time256, thSAD, ovrwins, sceneChange,
+      nBlkX, nBlkY, nPad, nBlkSize, nStepX, nStepY, nTh2, time256, thSAD, ovrwins, sceneChange,
       mv, pRef0, pRef, pblocks, nPitchSuper, nImgPitch);
     DEBUG_SYNC;
   }
@@ -2896,24 +2889,28 @@ public:
   template <int BLK_SIZE, int M>
   void launch_compensate_2x3_small(
     int nPatternX, int nPatternY,
-    int nBlkX, int nBlkY, CompensateBlock<pixel_t>* data, tmp_t* pDst, int pitch, int pitchsuper)
+    int nBlkX, int nBlkY, int nStepX, int nStepY, int nWidthLimit, int nHeightLimit,
+    CompensateBlock<pixel_t>* data, tmp_t* pDst, int pitch, int pitchsuper)
   {
     dim3 threads(BLK_SIZE, BLK_SIZE, M);
     dim3 blocks(nblocks(nBlkX, 3 * 2 * M), nblocks(nBlkY, 2 * 2));
-    kl_compensate_2x3<pixel_t, tmp_t, int, short, BLK_SIZE, M> << <blocks, threads, 0, stream >> > (
-      nPatternX, nPatternY, nBlkX, nBlkY, data, pDst, pitch, pitchsuper);
+    size_t shmem = (size_t)M * (BLK_SIZE + nStepY) * (2 * nStepX + BLK_SIZE) * sizeof(tmp_t) + 16;
+    kl_compensate_2x3<pixel_t, tmp_t, int, short, BLK_SIZE, M> << <blocks, threads, shmem, stream >> > (
+      nPatternX, nPatternY, nBlkX, nBlkY, nStepX, nStepY, nWidthLimit, nHeightLimit, data, pDst, pitch, pitchsuper);
     DEBUG_SYNC;
   }
 
   template <int BLK_SIZE, int M>
   void launch_compensate_2x3(
     int nPatternX, int nPatternY,
-    int nBlkX, int nBlkY, CompensateBlock<pixel_t>* data, tmp_t* pDst, int pitch4, int pitchsuper4)
+    int nBlkX, int nBlkY, int nStepX, int nStepY, int nWidthLimit, int nHeightLimit,
+    CompensateBlock<pixel_t>* data, tmp_t* pDst, int pitch4, int pitchsuper4)
   {
     dim3 threads(BLK_SIZE / 4, BLK_SIZE, M);
     dim3 blocks(nblocks(nBlkX, 3 * 2 * M), nblocks(nBlkY, 2 * 2));
-    kl_compensate_2x3<pixel_t, vtmp_t, int4, short4, BLK_SIZE, M> << <blocks, threads, 0, stream >> > (
-      nPatternX, nPatternY, nBlkX, nBlkY, data, (vtmp_t*)pDst, pitch4, pitchsuper4);
+    size_t shmem = (size_t)M * (BLK_SIZE + nStepY) * (2 * (nStepX / 4) + BLK_SIZE / 4) * sizeof(vtmp_t) + 16;
+    kl_compensate_2x3<pixel_t, vtmp_t, int4, short4, BLK_SIZE, M> << <blocks, threads, shmem, stream >> > (
+      nPatternX, nPatternY, nBlkX, nBlkY, nStepX, nStepY, nWidthLimit, nHeightLimit, data, (vtmp_t*)pDst, pitch4, pitchsuper4);
     DEBUG_SYNC;
   }
 
@@ -2929,7 +2926,7 @@ public:
   }
 
   void Compensate(
-    int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nPel, int nBitsPerPixel,
+    int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nOverlapX, int nOverlapY, int nPel, int nBitsPerPixel,
     bool* enableYUV,
     int nTh1, int nTh2, int time256, int thSAD,
     const short* ovrwins, const short* overwinsUV,
@@ -2951,12 +2948,11 @@ public:
       DEBUG_SYNC;
     }
 
-    int nOverlap = nBlkSize / 2;
-    int nWidth_B = nBlkX*(nBlkSize - nOverlap) + nOverlap;
-    int nHeight_B = nBlkY*(nBlkSize - nOverlap) + nOverlap;
+    int nWidth_B = nBlkX*(nBlkSize - nOverlapX) + nOverlapX;
+    int nHeight_B = nBlkY*(nBlkSize - nOverlapY) + nOverlapY;
 
     typedef void (Me::*PREPARE)(
-      int nBlkX, int nBlkY, int nPad, int nBlkSize, int nTh2, int time256, int thSAD,
+      int nBlkX, int nBlkY, int nPad, int nBlkSize, int nStepX, int nStepY, int nTh2, int time256, int thSAD,
       const short* ovrwins,
       const int * __restrict__ sceneChange,
       const VECTOR *mv,
@@ -2989,6 +2985,10 @@ public:
       PREPARE prepare = (p == 0) ? prepare_func : prepareuv_func;
       int shift = (p == 0) ? 0 : 1;
       int blksize = nBlkSize >> shift;
+      int overlapX = nOverlapX >> shift;
+      int overlapY = nOverlapY >> shift;
+      int stepX = blksize - overlapX;
+      int stepY = blksize - overlapY;
       int width = nWidth >> shift;
       int width_b = nWidth_B >> shift;
       int width4 = width / 4;
@@ -3010,7 +3010,7 @@ public:
       }
 
       (this->*prepare)(
-        nBlkX, nBlkY, nPad >> shift, blksize, nTh2, time256, thSAD,
+        nBlkX, nBlkY, nPad >> shift, blksize, stepX, stepY, nTh2, time256, thSAD,
         (p == 0) ? ovrwins : overwinsUV,
         sceneChange, mv, pRef[0 + p], pRef[3 + p],
         compensateblocks, pitchsuper, imgpitch);
@@ -3022,10 +3022,12 @@ public:
 
       void(Me::*compensate_func)(
         int nPatternX, int nPatternY,
-        int nBlkX, int nBlkY, CompensateBlock<pixel_t>* data, tmp_t* pDst, int pitchX, int pitchsuperX);
+        int nBlkX, int nBlkY, int nStepX, int nStepY, int nWidthLimit, int nHeightLimit,
+        CompensateBlock<pixel_t>* data, tmp_t* pDst, int pitchX, int pitchsuperX);
 
+      bool useScalar = (blksize < 8) || (stepX % 4 != 0);
       int pitchX, pitchsuperX;
-      if (blksize < 8) {
+      if (useScalar) {
         pitchX = pitch;
         pitchsuperX = pitchsuper;
       }
@@ -3033,29 +3035,31 @@ public:
         pitchX = pitch4;
         pitchsuperX = pitchsuper4;
       }
+      int widthLimit = useScalar ? width_b : width_b4;
+      int heightLimit = height_b;
 
       switch (blksize) {
       case 4:
         compensate_func = &Me::launch_compensate_2x3_small<4, 8>;  // 4x4x8  = 128threads
         break;
       case 8:
-        compensate_func = &Me::launch_compensate_2x3<8, 8>;  // 8x2x8  = 128threads
+        compensate_func = useScalar ? &Me::launch_compensate_2x3_small<8, 8> : &Me::launch_compensate_2x3<8, 8>;  // 8x2x8  = 128threads
         break;
       case 16:
-        compensate_func = &Me::launch_compensate_2x3<16, 1>; // 16x4x1 =  64threads
+        compensate_func = useScalar ? &Me::launch_compensate_2x3_small<16, 1> : &Me::launch_compensate_2x3<16, 1>; // 16x4x1 =  64threads
         break;
       case 32:
-        compensate_func = &Me::launch_compensate_2x3<32, 1>; // 32x8x1 = 256threads
+        compensate_func = useScalar ? &Me::launch_compensate_2x3_small<32, 1> : &Me::launch_compensate_2x3<32, 1>; // 32x8x1 = 256threads
         break;
       default:
         env->ThrowError("未対応ブロックサイズ");
       }
 
       // 4回カーネル呼び出し
-      (this->*compensate_func)(0, 0, nBlkX, nBlkY, compensateblocks, pTmp[p], pitchX, pitchsuperX);
-      (this->*compensate_func)(1, 0, nBlkX, nBlkY, compensateblocks, pTmp[p], pitchX, pitchsuperX);
-      (this->*compensate_func)(0, 1, nBlkX, nBlkY, compensateblocks, pTmp[p], pitchX, pitchsuperX);
-      (this->*compensate_func)(1, 1, nBlkX, nBlkY, compensateblocks, pTmp[p], pitchX, pitchsuperX);
+      (this->*compensate_func)(0, 0, nBlkX, nBlkY, stepX, stepY, widthLimit, heightLimit, compensateblocks, pTmp[p], pitchX, pitchsuperX);
+      (this->*compensate_func)(1, 0, nBlkX, nBlkY, stepX, stepY, widthLimit, heightLimit, compensateblocks, pTmp[p], pitchX, pitchsuperX);
+      (this->*compensate_func)(0, 1, nBlkX, nBlkY, stepX, stepY, widthLimit, heightLimit, compensateblocks, pTmp[p], pitchX, pitchsuperX);
+      (this->*compensate_func)(1, 1, nBlkX, nBlkY, stepX, stepY, widthLimit, heightLimit, compensateblocks, pTmp[p], pitchX, pitchsuperX);
 
       // tmp_t -> pixel_t 変換
       launch_short_to_byte_or_copy_src(

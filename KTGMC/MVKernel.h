@@ -59,9 +59,9 @@ public:
   // Degrain //
   virtual void GetDegrainStructSize(int N, int& degrainBlock, int& degrainArg) = 0;
 
-  //35 args
+  //37 args
   virtual void Degrain(
-    int N, int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nPel, int nBitsPerPixel,
+    int N, int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nOverlapX, int nOverlapY, int nPel, int nBitsPerPixel,
     bool* enableYUV, bool* isUsableB, bool* isUsableF,
     int nTh1, int nTh2, int thSAD, int thSADC, bool binomial,
     const short* ovrwins, const short* overwinsUV,
@@ -74,9 +74,9 @@ public:
   // Compensate //
   virtual int GetCompensateStructSize() = 0;
 
-  //31 args
+  //33 args
   virtual void Compensate(
-    int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nPel, int nBitsPerPixel,
+    int nWidth, int nHeight, int nBlkX, int nBlkY, int nPad, int nBlkSize, int nOverlapX, int nOverlapY, int nPel, int nBitsPerPixel,
     bool* enableYUV,
     int nTh1, int nTh2, int time256, int thSAD,
     const short* ovrwins, const short* overwinsUV, const VECTOR* mv,
