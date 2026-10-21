@@ -826,12 +826,12 @@ function KTGMC_MAnalyze( clip srchSuper, clip srchSuperP, bool isb, int delta, i
 					int plevel, bool global, int dct, bool chroma, int batch)
 {
 	# partial mv on CPU
-	pmv = srchSuperP.KMAnalyse(blksize=blksize, overlap=overlap, search=search, isb=isb, chroma=chroma, \
+	pmv = srchSuperP.KMAnalyse(blksize=blksize, overlap=overlap, search=search, isb=isb, chroma=chroma, searchparam=searchparam, pelsearch=pelsearch, \
 					delta=delta, lambda=lambda, lsad=lsad, global=global, plevel=plevel, pnew=pnew, \
 					meander=false, batch=1).OnCPU(2)
 
 	# main mv on CUDA
-	return srchSuper.KMAnalyse(blksize=blksize, overlap=overlap, search=search, isb=isb, chroma=chroma, \
+	return srchSuper.KMAnalyse(blksize=blksize, overlap=overlap, search=search, isb=isb, chroma=chroma, searchparam=searchparam, pelsearch=pelsearch, \
 					delta=delta, lambda=lambda, lsad=lsad, global=global, plevel=plevel, pnew=pnew, \
 					meander=false, partial=pmv, batch=batch)
 }

@@ -2857,12 +2857,14 @@ public:
     int plevel;
     bool global;
     int overlap = args[2].AsInt(blksize / 2);
+    int searchparam = args[15].Defined() ? args[15].AsInt(2) : 2;
+    int pelsearch = args[16].Defined() ? args[16].AsInt(2) : 2;
 
     bool truemotion = false; // preset added in v0.9.13
     lambda = args[7].AsInt(400);
     lsad = args[8].AsInt(400);
-    pnew = args[10].AsInt(25);
-    plevel = args[11].AsInt(0);
+    pnew = args[11].AsInt(25);
+    plevel = args[10].AsInt(0);
     global = args[9].AsBool(true);
 
     return new KMAnalyse(
@@ -2872,8 +2874,8 @@ public:
       blksizeV,                // v.1.7
       0,       // levels skip
       args[3].AsInt(4),       // search type
-      2,       // search parameter
-      2,       // search parameter at finest level
+      searchparam,   // search parameter
+      pelsearch,     // search parameter at finest level
       args[4].AsBool(false),  // is backward
       lambda,                  // lambda
       args[5].AsBool(true),   // chroma = true since v1.0.1
@@ -5413,7 +5415,7 @@ void AddFuncMV(IScriptEnvironment* env)
   env->AddFunction("KMPartialSuper", "c[drop]i", KMPartialSuper::Create, 0);
 
   env->AddFunction("KMAnalyse",
-    "c[blksize]i[overlap]i[search]i[isb]b[chroma]b[delta]i[lambda]i[lsad]i[global]b[plevel]i[pnew]i[meander]b[partial]c[batch]i",
+    "c[blksize]i[overlap]i[search]i[isb]b[chroma]b[delta]i[lambda]i[lsad]i[global]b[plevel]i[pnew]i[meander]b[partial]c[batch]i[searchparam]i[pelsearch]i",
     KMAnalyse::Create, 0);
 
   env->AddFunction("KMDegrain1",
