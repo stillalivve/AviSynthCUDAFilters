@@ -381,11 +381,12 @@ private:
         vi.width, vi.height, smallMask.data(), nWidthB, nHeightB, sceneChange, nSceneChangeValue,
         bitsPerPixel, maxPixelValue);
       if (!vi.IsY()) {
-        for (int p = PLANAR_U; p <= PLANAR_V; ++p) {
-          WritePlaneCPU(reinterpret_cast<uint8_t*>(dst->GetWritePtr(p)), dst->GetPitch(p),
-            widthUV, heightUV, smallMask.data(), widthBUV, heightBUV, sceneChange, nSceneChangeValue,
-            bitsPerPixel, maxPixelValue);
-        }
+        WritePlaneCPU(reinterpret_cast<uint8_t*>(dst->GetWritePtr(PLANAR_U)), dst->GetPitch(PLANAR_U),
+          widthUV, heightUV, smallMask.data(), widthBUV, heightBUV, sceneChange, nSceneChangeValue,
+          bitsPerPixel, maxPixelValue);
+        WritePlaneCPU(reinterpret_cast<uint8_t*>(dst->GetWritePtr(PLANAR_V)), dst->GetPitch(PLANAR_V),
+          widthUV, heightUV, smallMask.data(), widthBUV, heightBUV, sceneChange, nSceneChangeValue,
+          bitsPerPixel, maxPixelValue);
       }
     }
     else {
@@ -393,11 +394,12 @@ private:
         vi.width, vi.height, smallMask.data(), nWidthB, nHeightB, sceneChange, nSceneChangeValue,
         bitsPerPixel, maxPixelValue);
       if (!vi.IsY()) {
-        for (int p = PLANAR_U; p <= PLANAR_V; ++p) {
-          WritePlaneCPU(reinterpret_cast<uint16_t*>(dst->GetWritePtr(p)), dst->GetPitch(p) / 2,
-            widthUV, heightUV, smallMask.data(), widthBUV, heightBUV, sceneChange, nSceneChangeValue,
-            bitsPerPixel, maxPixelValue);
-        }
+        WritePlaneCPU(reinterpret_cast<uint16_t*>(dst->GetWritePtr(PLANAR_U)), dst->GetPitch(PLANAR_U) / 2,
+          widthUV, heightUV, smallMask.data(), widthBUV, heightBUV, sceneChange, nSceneChangeValue,
+          bitsPerPixel, maxPixelValue);
+        WritePlaneCPU(reinterpret_cast<uint16_t*>(dst->GetWritePtr(PLANAR_V)), dst->GetPitch(PLANAR_V) / 2,
+          widthUV, heightUV, smallMask.data(), widthBUV, heightBUV, sceneChange, nSceneChangeValue,
+          bitsPerPixel, maxPixelValue);
       }
     }
 
@@ -564,19 +566,28 @@ public:
       int heightBUV = nHeightB >> logUVy;
       dim3 blocksUV(nblocks(widthUV, threads2.x), nblocks(heightUV, threads2.y));
 
-      for (int p = PLANAR_U; p <= PLANAR_V; ++p) {
-        if (vi.ComponentSize() == 1) {
-          kl_mask_scale<uint8_t><<<blocksUV, threads2, 0, stream>>>(
-            d_small, reinterpret_cast<uint8_t*>(dst->GetWritePtr(p)), dst->GetPitch(p),
-            widthUV, heightUV, nBlkX, nBlkY, widthBUV, heightBUV,
-            bitsPerPixel, maxPixelValue, d_sccount, nSCD2Limit, nSceneChangeValue, isValid ? 0 : 1);
-        }
-        else {
-          kl_mask_scale<uint16_t><<<blocksUV, threads2, 0, stream>>>(
-            d_small, reinterpret_cast<uint16_t*>(dst->GetWritePtr(p)), dst->GetPitch(p) / 2,
-            widthUV, heightUV, nBlkX, nBlkY, widthBUV, heightBUV,
-            bitsPerPixel, maxPixelValue, d_sccount, nSCD2Limit, nSceneChangeValue, isValid ? 0 : 1);
-        }
+      // NOTE: PLANAR_Y/U/V are bit masks, not plane numbers, so the planes
+      // have to be handled one by one.  Iterating from PLANAR_U to PLANAR_V
+      // would use the invalid plane index 3, which returns the luma plane.
+      if (vi.ComponentSize() == 1) {
+        kl_mask_scale<uint8_t><<<blocksUV, threads2, 0, stream>>>(
+          d_small, reinterpret_cast<uint8_t*>(dst->GetWritePtr(PLANAR_U)), dst->GetPitch(PLANAR_U),
+          widthUV, heightUV, nBlkX, nBlkY, widthBUV, heightBUV,
+          bitsPerPixel, maxPixelValue, d_sccount, nSCD2Limit, nSceneChangeValue, isValid ? 0 : 1);
+        kl_mask_scale<uint8_t><<<blocksUV, threads2, 0, stream>>>(
+          d_small, reinterpret_cast<uint8_t*>(dst->GetWritePtr(PLANAR_V)), dst->GetPitch(PLANAR_V),
+          widthUV, heightUV, nBlkX, nBlkY, widthBUV, heightBUV,
+          bitsPerPixel, maxPixelValue, d_sccount, nSCD2Limit, nSceneChangeValue, isValid ? 0 : 1);
+      }
+      else {
+        kl_mask_scale<uint16_t><<<blocksUV, threads2, 0, stream>>>(
+          d_small, reinterpret_cast<uint16_t*>(dst->GetWritePtr(PLANAR_U)), dst->GetPitch(PLANAR_U) / 2,
+          widthUV, heightUV, nBlkX, nBlkY, widthBUV, heightBUV,
+          bitsPerPixel, maxPixelValue, d_sccount, nSCD2Limit, nSceneChangeValue, isValid ? 0 : 1);
+        kl_mask_scale<uint16_t><<<blocksUV, threads2, 0, stream>>>(
+          d_small, reinterpret_cast<uint16_t*>(dst->GetWritePtr(PLANAR_V)), dst->GetPitch(PLANAR_V) / 2,
+          widthUV, heightUV, nBlkX, nBlkY, widthBUV, heightBUV,
+          bitsPerPixel, maxPixelValue, d_sccount, nSCD2Limit, nSceneChangeValue, isValid ? 0 : 1);
       }
     }
 
