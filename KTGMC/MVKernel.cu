@@ -710,7 +710,7 @@ union SearchBatchData {
 template <typename pixel_t, int BLK_SIZE, int SEARCH, int NPEL, bool CHROMA, bool CPU_EMU>
 __global__ void kl_search(
   SearchBatchData<pixel_t> *pdata,
-  int nBlkX, int nBlkY, int nPad,
+  int nBlkX, int nBlkY, int nPad, int nBlkSizeOvr,
   int nPitchY, int nPitchUV,
   int nImgPitchY, int nImgPitchUV
 )
@@ -749,8 +749,8 @@ __global__ void kl_search(
     for (int blky = 0; blky < nBlkY; ++blky) {
 
       // srcをshared memoryに転送
-      int offx = nPad + blkx * BLK_STEP;
-      int offy = nPad + blky * BLK_STEP;
+      int offx = nPad + blkx * nBlkSizeOvr;
+      int offy = nPad + blky * nBlkSizeOvr;
 
       __shared__ pixel_t srcY[BLK_SIZE * BLK_SIZE];
       __shared__ pixel_t srcU[BLK_SIZE_UV * BLK_SIZE_UV];
@@ -979,7 +979,7 @@ __global__ void kl_calc_all_sad(
   int nBlkX, int nBlkY,
   const short2* vectors, // [x,y]
   int* dst_sad,
-  int nPad,
+  int nPad, int nBlkSizeOvr,
   const pixel_t* __restrict__ pSrcY, const pixel_t* __restrict__ pSrcU, const pixel_t* __restrict__ pSrcV,
   const pixel_t* __restrict__ pRefY, const pixel_t* __restrict__ pRefU, const pixel_t* __restrict__ pRefV,
   int nPitchY, int nPitchUV,
@@ -994,8 +994,8 @@ __global__ void kl_calc_all_sad(
   int bx = blockIdx.x;
   int by = blockIdx.y;
 
-  int offx = nPad + bx * BLK_STEP;
-  int offy = nPad + by * BLK_STEP;
+  int offx = nPad + bx * nBlkSizeOvr;
+  int offy = nPad + by * nBlkSizeOvr;
 
   __shared__ const pixel_t* pRefBY;
   __shared__ const pixel_t* pRefBU;
@@ -2265,7 +2265,7 @@ public:
   void launch_search(
     int batch,
     SearchBatchData<pixel_t> *pdata,
-    int nBlkX, int nBlkY, int nPad,
+    int nBlkX, int nBlkY, int nPad, int nBlkSizeOvr,
     int nPitchY, int nPitchUV,
     int nImgPitchY, int nImgPitchUV, cudaStream_t stream)
   {
@@ -2273,7 +2273,7 @@ public:
     // 余分なブロックは仕事せずに終了するので問題ない
     dim3 blocks(batch, std::min(nBlkX, nBlkY));
     kl_search<pixel_t, BLK_SIZE, SEARCH, NPEL, CHROMA, CPU_EMU> << <blocks, threads, 0, stream >> > (
-      pdata, nBlkX, nBlkY, nPad,
+      pdata, nBlkX, nBlkY, nPad, nBlkSizeOvr,
       nPitchY, nPitchUV, nImgPitchY, nImgPitchUV);
     DEBUG_SYNC;
   }
@@ -2281,7 +2281,7 @@ public:
   typedef void (Me::*LAUNCH_SEARCH)(
     int batch,
     SearchBatchData<pixel_t> *pdata,
-    int nBlkX, int nBlkY, int nPad,
+    int nBlkX, int nBlkY, int nPad, int nBlkSizeOvr,
     int nPitchY, int nPitchUV,
     int nImgPitchY, int nImgPitchUV, cudaStream_t stream);
 
@@ -2289,7 +2289,7 @@ public:
   void launch_calc_all_sad(
     int nBlkX, int nBlkY,
     const short2* vectors, // [x,y]
-    int* dst_sad, int nPad,
+    int* dst_sad, int nPad, int nBlkSizeOvr,
     const pixel_t* pSrcY, const pixel_t* pSrcU, const pixel_t* pSrcV,
     const pixel_t* pRefY, const pixel_t* pRefU, const pixel_t* pRefV,
     int nPitchY, int nPitchUV,
@@ -2298,7 +2298,7 @@ public:
     dim3 threads(BLK_SIZE * 8);
     dim3 blocks(nBlkX, nBlkY);
     kl_calc_all_sad <pixel_t, BLK_SIZE, NPEL, CHROMA> << <blocks, threads, 0, stream >> > (
-      nBlkX, nBlkY, vectors, dst_sad, nPad,
+      nBlkX, nBlkY, vectors, dst_sad, nPad, nBlkSizeOvr,
       pSrcY, pSrcU, pSrcV, pRefY, pRefU, pRefV,
       nPitchY, nPitchUV, nImgPitchY, nImgPitchUV);
     DEBUG_SYNC;
@@ -2307,7 +2307,7 @@ public:
   typedef void (Me::*LAUNCH_CALC_ALL_SAD)(
     int nBlkX, int nBlkY,
     const short2* vectors, // [x,y]
-    int* dst_sad, int nPad,
+    int* dst_sad, int nPad, int nBlkSizeOvr,
     const pixel_t* pSrcY, const pixel_t* pSrcU, const pixel_t* pSrcV,
     const pixel_t* pRefY, const pixel_t* pRefU, const pixel_t* pRefV,
     int nPitchY, int nPitchUV,
@@ -2425,7 +2425,7 @@ public:
       if (analyzef == NULL) {
         env->ThrowError("Unsupported search param combination");
       }
-      (this->*analyzef)(batch, searchbatch, nBlkX, nBlkY, nPad,
+      (this->*analyzef)(batch, searchbatch, nBlkX, nBlkY, nPad, nBlkSizeOvr,
         nPitchY, nPitchUV, nImgPitchY, nImgPitchUV, stream);
 
       //DataDebug<short2> d(vectors, nBlkX*nBlkY, env);
@@ -2452,7 +2452,7 @@ public:
       // calc_all_sadは十分な並列性があるのでバッチ分はループで回す
       for (int i = 0; i < batch; ++i) {
         (this->*table[fidx])(nBlkX, nBlkY,
-          vectors + vectorsPitch * i, sads + sadPitch * i, nPad,
+          vectors + vectorsPitch * i, sads + sadPitch * i, nPad, nBlkSizeOvr,
           pSrcY[i], pSrcU[i], pSrcV[i], pRefY[i], pRefU[i], pRefV[i],
           nPitchY, nPitchUV, nImgPitchY, nImgPitchUV, stream);
         DEBUG_SYNC;

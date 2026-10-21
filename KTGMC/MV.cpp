@@ -2535,9 +2535,8 @@ public:
     if (overlapx != overlapy) {
       env->ThrowError("KMAnalyse: overlapx != overlapy");
     }
-    if (blksizex != overlapx * 2) {
-      env->ThrowError("KMAnalyse: blksizex != overlapx * 2");
-    }
+    // The MVTools accept an overlap that is smaller than half the block size,
+    // the limit is checked below.
     if (blksizex != 8 && blksizex != 16 && blksizex != 32) {
       env->ThrowError("KMAnalyse: blksizex must be 8 or 16 or 32");
     }
