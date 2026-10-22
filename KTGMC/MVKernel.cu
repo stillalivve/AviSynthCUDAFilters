@@ -838,7 +838,9 @@ __global__ void kl_search(
               int a = pred[3][tx];
               int b = pred[4][tx];
               int c = pred[5][tx];
-              pred[6][tx] = min(max(min(a, b), c), max(a, b));
+              // the first row of the blocks has no predictor above it, the
+              // predictor at the left is used there and not the median
+              pred[6][tx] = (blky == 0) ? a : min(max(min(a, b), c), max(a, b));
             }
           }
         }
@@ -1209,7 +1211,6 @@ __global__ void kl_prepare_search(
     data->dataf[3] = penaltyNew;
 
     sad_t lambda = nLambdaLevel * lsad / (lsad + (sad >> 1)) * lsad / (lsad + (sad >> 1));
-    if (by == 0) lambda = 0;
     data->dataf[4] = lambda;
   }
 }
