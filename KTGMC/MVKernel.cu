@@ -820,13 +820,18 @@ __global__ void kl_search(
             pred[dx][0] = vec.x;
             pred[dx][1] = vec.y;
             // memfence
+            // the threads 0 and 1 read the predictors of the threads 3, 4
+            // and 5 below, they have to wait for them
+            __syncwarp(0x3f);
             if (tx < 2) {
               // Median predictor
               // 計算効率が悪いので消したい・・・
               int a = pred[4][tx];
               int b = pred[5][tx];
               int c = pred[6][tx];
-              pred[3][tx] = min(max(min(a, b), c), max(a, b));
+              // the first row of the blocks has no predictor above it, the
+              // predictor at the left is used there and not the median
+              pred[3][tx] = (blky == 0) ? a : min(max(min(a, b), c), max(a, b));
             }
           }
           else {
@@ -846,6 +851,8 @@ __global__ void kl_search(
           }
         }
         // memfence
+        // the thread 3 reads the median that the threads 0 and 1 computed
+        __syncwarp(0x7f);
         int x = result[tx].xy.x = pred[tx][0];
         int y = result[tx].xy.y = pred[tx][1];
         result[tx].cost = (LAMBDA * dev_sq_norm(x, y, PRED_X, PRED_Y)) >> 8;
@@ -1186,7 +1193,7 @@ __global__ void kl_prepare_search(
     }
     else {
       // medianでleftを選ばせるため
-      p2 = p1;
+      p2 = -2;
     }
 
     int p3 = -2;
