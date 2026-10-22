@@ -1205,6 +1205,9 @@ class PlaneOfBlocks : public PlaneOfBlocksBase
 
     typedef typename std::conditional < sizeof(pixel_t) == 1, int, __int64 >::type safe_sad_t;
     nCurrentLambda = nCurrentLambda*(safe_sad_t)p.lsad / ((safe_sad_t)p.lsad + (predictor.sad >> 1))*p.lsad / ((safe_sad_t)p.lsad + (predictor.sad >> 1));
+    // the first row of the blocks has no predictor above it, the search of
+    // the device uses no lambda there
+    if (blky == 0) nCurrentLambda = 0;
     // replaced hard threshold by soft in v1.10.2 by Fizick (a liitle complex expression to avoid overflow)
     //	int a = LSAD/(LSAD + (predictor.sad>>1));
     //	nCurrentLambda = nCurrentLambda*a*a;
@@ -1270,6 +1273,9 @@ class PlaneOfBlocks : public PlaneOfBlocksBase
 
     typedef typename std::conditional < sizeof(pixel_t) == 1, int, __int64 >::type safe_sad_t;
     nCurrentLambda = nCurrentLambda*(safe_sad_t)p.lsad / ((safe_sad_t)p.lsad + (predictor.sad >> 1))*p.lsad / ((safe_sad_t)p.lsad + (predictor.sad >> 1));
+    // the first row of the blocks has no predictor above it, the search of
+    // the device uses no lambda there
+    if (blky == 0) nCurrentLambda = 0;
     // replaced hard threshold by soft in v1.10.2 by Fizick (a liitle complex expression to avoid overflow)
     //	int a = LSAD/(LSAD + (predictor.sad>>1));
     //	nCurrentLambda = nCurrentLambda*a*a;
