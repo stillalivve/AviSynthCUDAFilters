@@ -712,7 +712,8 @@ __global__ void kl_search(
   SearchBatchData<pixel_t> *pdata,
   int nBlkX, int nBlkY, int nPad, int nBlkSizeOvr,
   int nPitchY, int nPitchUV,
-  int nImgPitchY, int nImgPitchUV
+  int nImgPitchY, int nImgPitchUV,
+  int nSearchParam
 )
 {
   // threads=BLK_SIZE*8
@@ -940,17 +941,25 @@ __global__ void kl_search(
           tx, wi, bx, bmx, bmy, data, dataf, result[0],
           srcY, srcU, srcV, pRefBY, pRefBU, pRefBV,
           nPitchY, nPitchUV, nPitchUV, nImgPitchY, nImgPitchUV, nImgPitchUV);
-        dev_expanding_search_2<pixel_t, BLK_SIZE, NPEL, CHROMA, CPU_EMU>(debug,
-          tx, wi, bx, bmx, bmy, data, dataf, result[0],
-          srcY, srcU, srcV, pRefBY, pRefBU, pRefBV,
-          nPitchY, nPitchUV, nPitchUV, nImgPitchY, nImgPitchUV, nImgPitchUV);
+        // the ring of the radius 2 is searched when the range of the search
+        // is more than 1, the MVTools do the same
+        if (nSearchParam > 1) {
+          dev_expanding_search_2<pixel_t, BLK_SIZE, NPEL, CHROMA, CPU_EMU>(debug,
+            tx, wi, bx, bmx, bmy, data, dataf, result[0],
+            srcY, srcU, srcV, pRefBY, pRefBU, pRefBV,
+            nPitchY, nPitchUV, nPitchUV, nImgPitchY, nImgPitchUV, nImgPitchUV);
+        }
       }
       else if (SEARCH == 2) {
         // HEX2SEARCH
-        dev_hex2_search_1<pixel_t, BLK_SIZE, NPEL, CHROMA, CPU_EMU>(debug,
-          tx, wi, bx, result[0].xy.x, result[0].xy.y, data, dataf, result[0],
-          srcY, srcU, srcV, pRefBY, pRefBU, pRefBV,
-          nPitchY, nPitchUV, nPitchUV, nImgPitchY, nImgPitchUV, nImgPitchUV);
+        // the hexagon of the radius 2 is searched when the range of the
+        // search is more than 1, the MVTools do the same
+        if (nSearchParam > 1) {
+          dev_hex2_search_1<pixel_t, BLK_SIZE, NPEL, CHROMA, CPU_EMU>(debug,
+            tx, wi, bx, result[0].xy.x, result[0].xy.y, data, dataf, result[0],
+            srcY, srcU, srcV, pRefBY, pRefBU, pRefBV,
+            nPitchY, nPitchUV, nPitchUV, nImgPitchY, nImgPitchUV, nImgPitchUV);
+        }
         dev_expanding_search_1<pixel_t, BLK_SIZE, NPEL, CHROMA, CPU_EMU>(debug,
           tx, wi, bx, result[0].xy.x, result[0].xy.y, data, dataf, result[0],
           srcY, srcU, srcV, pRefBY, pRefBU, pRefBV,
@@ -2250,14 +2259,14 @@ public:
     SearchBatchData<pixel_t> *pdata,
     int nBlkX, int nBlkY, int nPad, int nBlkSizeOvr,
     int nPitchY, int nPitchUV,
-    int nImgPitchY, int nImgPitchUV, cudaStream_t stream)
+    int nImgPitchY, int nImgPitchUV, int nSearchParam, cudaStream_t stream)
   {
     dim3 threads(BLK_SIZE * 8);
     // 余分なブロックは仕事せずに終了するので問題ない
     dim3 blocks(batch, std::min(nBlkX, nBlkY));
     kl_search<pixel_t, BLK_SIZE, SEARCH, NPEL, CHROMA, CPU_EMU> << <blocks, threads, 0, stream >> > (
       pdata, nBlkX, nBlkY, nPad, nBlkSizeOvr,
-      nPitchY, nPitchUV, nImgPitchY, nImgPitchUV);
+      nPitchY, nPitchUV, nImgPitchY, nImgPitchUV, nSearchParam);
     DEBUG_SYNC;
   }
 
@@ -2266,7 +2275,7 @@ public:
     SearchBatchData<pixel_t> *pdata,
     int nBlkX, int nBlkY, int nPad, int nBlkSizeOvr,
     int nPitchY, int nPitchUV,
-    int nImgPitchY, int nImgPitchUV, cudaStream_t stream);
+    int nImgPitchY, int nImgPitchUV, int nSearchParam, cudaStream_t stream);
 
   template <int BLK_SIZE, int NPEL, bool CHROMA>
   void launch_calc_all_sad(
@@ -2310,6 +2319,7 @@ public:
     int batch, void* _searchbatch,
     int searchType, int nBlkX, int nBlkY, int nBlkSize, int nLogScale,
     int nLambdaLevel, int lsad, int penaltyZero, int penaltyGlobal, int penaltyNew,
+    int nSearchParam,
     int nPel, bool chroma, int nPad, int nBlkSizeOvr, int nExtendedWidth, int nExptendedHeight,
     const pixel_t** pSrcY, const pixel_t** pSrcU, const pixel_t** pSrcV,
     const pixel_t** pRefY, const pixel_t** pRefU, const pixel_t** pRefV,
@@ -2409,7 +2419,7 @@ public:
         env->ThrowError("Unsupported search param combination");
       }
       (this->*analyzef)(batch, searchbatch, nBlkX, nBlkY, nPad, nBlkSizeOvr,
-        nPitchY, nPitchUV, nImgPitchY, nImgPitchUV, stream);
+        nPitchY, nPitchUV, nImgPitchY, nImgPitchUV, nSearchParam, stream);
 
       //DataDebug<short2> d(vectors, nBlkX*nBlkY, env);
       //d.Show();

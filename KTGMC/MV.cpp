@@ -1318,8 +1318,9 @@ class PlaneOfBlocks : public PlaneOfBlocksBase
     int bmx = bestMV.x;
     int bmy = bestMV.y;
 
-    /* the hexagon of the radius 2 is always searched, the search of the
-       device uses it for every range of the search */
+    /* the MVTools search the hexagon of the radius 2 only when the range of
+       the search is more than 1 */
+    if (i_me_range > 1)
     {
       /* hexagon */
       CheckMVdir(bmx - 2, bmy, &dir, 0);
@@ -1369,14 +1370,14 @@ class PlaneOfBlocks : public PlaneOfBlocksBase
       //		ExhaustiveSearch(nSearchParam);
       int mvx = bestMV.x;
       int mvy = bestMV.y;
-      for (int i = 1; i <= p.nSearchParam; i++)// region is same as exhaustive, but ordered by radius (from near to far)
+      for (int i = 1; i <= p.PelSearch; i++)// region is same as exhaustive, but ordered by radius (from near to far)
       {
         ExpandingSearch(i, 1, mvx, mvy);
       }
     }
                      break;
     case HEX2SEARCH:
-      Hex2Search(p.nSearchParam);
+      Hex2Search(p.PelSearch);
       break;
     default:
       // Not implemented
@@ -2257,7 +2258,7 @@ public:
 
     kernel->Search(batch, batchdata, p.searchType, p.nBlkX, p.nBlkY, p.nBlkSizeX,
       p.nLogScale, p.nLambdaLevel, p.lsad, p.penaltyZero,
-      p.pglobal, p.penaltyNew, p.nPel, p.chroma,
+      p.pglobal, p.penaltyNew, p.PelSearch, p.nPel, p.chroma,
       pSrcYPlane->GetHPadding(), nBlkSizeX, nExtendedWidth, nExtendedHeight,
       pSrcY, pSrcU, pSrcV, pRefY, pRefU, pRefV,
       nSrcPitchY, nSrcPitchUV, nImgPitchY, nImgPitchUV,
