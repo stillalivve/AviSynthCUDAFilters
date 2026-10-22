@@ -50,7 +50,7 @@ public:
     int batch, void* _searchbatch,
     int searchType, int nBlkX, int nBlkY, int nBlkSize, int nLogScale,
     int nLambdaLevel, int lsad, int penaltyZero, int penaltyGlobal, int penaltyNew,
-    int nSearchParam,
+    int nSearchParam, bool smallestPlane,
     int nPel, bool chroma, int nPad, int nBlkSizeOvr, int nExtendedWidth, int nExptendedHeight,
     const pixel_t** pSrcY, const pixel_t** pSrcU, const pixel_t** pSrcV,
     const pixel_t** pRefY, const pixel_t** pRefU, const pixel_t** pRefV,

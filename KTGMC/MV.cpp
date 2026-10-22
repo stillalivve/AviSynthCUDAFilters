@@ -2258,7 +2258,7 @@ public:
 
     kernel->Search(batch, batchdata, p.searchType, p.nBlkX, p.nBlkY, p.nBlkSizeX,
       p.nLogScale, p.nLambdaLevel, p.lsad, p.penaltyZero,
-      p.pglobal, p.penaltyNew, p.PelSearch, p.nPel, p.chroma,
+      p.pglobal, p.penaltyNew, p.PelSearch, p.smallestPlane, p.nPel, p.chroma,
       pSrcYPlane->GetHPadding(), nBlkSizeX, nExtendedWidth, nExtendedHeight,
       pSrcY, pSrcU, pSrcV, pRefY, pRefU, pRefV,
       nSrcPitchY, nSrcPitchUV, nImgPitchY, nImgPitchUV,

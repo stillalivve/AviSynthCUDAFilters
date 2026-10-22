@@ -855,7 +855,15 @@ __global__ void kl_search(
         __syncwarp(0x7f);
         int x = result[tx].xy.x = pred[tx][0];
         int y = result[tx].xy.y = pred[tx][1];
-        result[tx].cost = (LAMBDA * dev_sq_norm(x, y, PRED_X, PRED_Y)) >> 8;
+        // the MVTools use the median of the three predictors as the predictor
+        // of the search in the coarsest level of the analysis
+        int px = PRED_X, py = PRED_Y;
+        if (dataf[2] != 0) {
+          if (tx == 2) { x = pred[3][0]; y = pred[3][1]; }
+          px = pred[3][0];
+          py = pred[3][1];
+        }
+        result[tx].cost = (LAMBDA * dev_sq_norm(x, y, px, py)) >> 8;
 
         pRefY[tx] = dev_get_ref_block<pixel_t, NPEL>(pRefBY, nPitchY, nImgPitchY, x, y);
         if (CHROMA) {
@@ -1120,7 +1128,7 @@ __global__ void kl_calc_all_sad(
 __global__ void kl_prepare_search(
   int nBlkX, int nBlkY, int nBlkSize, int nLogScale,
   sad_t nLambdaLevel, sad_t lsad,
-  sad_t penaltyZero, sad_t penaltyGlobal, sad_t penaltyNew,
+  sad_t penaltyZero, sad_t penaltyGlobal, sad_t penaltyNew, bool smallestPlane,
   int nPel, int nPad, int nBlkSizeOvr, int nExtendedWidth, int nExptendedHeight,
   const short2* vectors, int vectorsPitch, const int* sads, int sadPitch, short2* vectors_copy, SearchBlock* dst_blocks, int* prog, int* next)
 {
@@ -1156,8 +1164,8 @@ __global__ void kl_prepare_search(
     //
     int nPaddingScaled = nPad >> nLogScale;
 
-    int nDxMax = nPel * (nExtendedWidth - x - nBlkSize - nPad + nPaddingScaled) - 1;
-    int nDyMax = nPel * (nExptendedHeight - y - nBlkSize - nPad + nPaddingScaled) - 1;
+    int nDxMax = nPel * (nExtendedWidth - x - nBlkSize - nPad + nPaddingScaled);
+    int nDyMax = nPel * (nExptendedHeight - y - nBlkSize - nPad + nPaddingScaled);
     int nDxMin = -nPel * (x - nPad + nPaddingScaled);
     int nDyMin = -nPel * (y - nPad + nPaddingScaled);
 
@@ -1223,7 +1231,7 @@ __global__ void kl_prepare_search(
 
     data->dataf[0] = penaltyZero;
     data->dataf[1] = penaltyGlobal;
-    data->dataf[2] = 0;
+    data->dataf[2] = smallestPlane ? 1 : 0;
     data->dataf[3] = penaltyNew;
 
     sad_t lambda = nLambdaLevel * lsad / (lsad + (sad >> 1)) * lsad / (lsad + (sad >> 1));
@@ -2340,7 +2348,7 @@ public:
     int batch, void* _searchbatch,
     int searchType, int nBlkX, int nBlkY, int nBlkSize, int nLogScale,
     int nLambdaLevel, int lsad, int penaltyZero, int penaltyGlobal, int penaltyNew,
-    int nSearchParam,
+    int nSearchParam, bool smallestPlane,
     int nPel, bool chroma, int nPad, int nBlkSizeOvr, int nExtendedWidth, int nExptendedHeight,
     const pixel_t** pSrcY, const pixel_t** pSrcU, const pixel_t** pSrcV,
     const pixel_t** pRefY, const pixel_t** pRefU, const pixel_t** pRefV,
@@ -2364,7 +2372,7 @@ public:
       dim3 blocks(nblocks(nBlkX, threads.x), nblocks(nBlkY, threads.y), batch);
       kl_prepare_search << <blocks, threads, 0, stream >> > (
         nBlkX, nBlkY, nBlkSize, nLogScale, nLambdaLevel, lsad,
-        penaltyZero, penaltyGlobal, penaltyNew,
+        penaltyZero, penaltyGlobal, penaltyNew, smallestPlane,
         nPel, nPad, nBlkSizeOvr, nExtendedWidth, nExptendedHeight,
         vectors, vectorsPitch, sads, sadPitch, &vectors[nBlkX*nBlkY], searchblocks, prog, next);
       DEBUG_SYNC;
