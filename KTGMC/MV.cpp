@@ -1312,7 +1312,8 @@ class PlaneOfBlocks : public PlaneOfBlocksBase
     int bmx = bestMV.x;
     int bmy = bestMV.y;
 
-    if (i_me_range > 1)
+    /* the hexagon of the radius 2 is always searched, the search of the
+       device uses it for every range of the search */
     {
       /* hexagon */
       CheckMVdir(bmx - 2, bmy, &dir, 0);
