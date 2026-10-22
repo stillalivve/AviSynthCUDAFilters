@@ -1439,38 +1439,52 @@ __global__ void kl_interpolate_prediction(
     int iper2 = i >> 1;
     int jper2 = j >> 1;
 
+    // the index of the block of the coarser level is negative for the second
+    // row of the blocks of the finest level, the MVTools read the memory in
+    // front of their array there, the memory of the device in front of the
+    // array is not the memory of the heap of the MVTools
+    int nSrcCount = nSrcBlkX * nSrcBlkY;
+    int idx1 = iper2 + (jper2)* nSrcBlkX;
+    int idx2 = iper2 + offx + (jper2)* nSrcBlkX;
+    int idx3 = iper2 + (jper2 + offy) * nSrcBlkX;
+    int idx4 = iper2 + offx + (jper2 + offy) * nSrcBlkX;
+    idx1 = (idx1 < 0) ? 0 : ((idx1 >= nSrcCount) ? nSrcCount - 1 : idx1);
+    idx2 = (idx2 < 0) ? 0 : ((idx2 >= nSrcCount) ? nSrcCount - 1 : idx2);
+    idx3 = (idx3 < 0) ? 0 : ((idx3 >= nSrcCount) ? nSrcCount - 1 : idx3);
+    idx4 = (idx4 < 0) ? 0 : ((idx4 >= nSrcCount) ? nSrcCount - 1 : idx4);
+
     if ((i == 0) || (i >= 2 * nSrcBlkX - 1))
     {
       if ((j == 0) || (j >= 2 * nSrcBlkY - 1))
       {
-        v1 = v2 = v3 = v4 = src_vector[iper2 + (jper2)* nSrcBlkX];
-        sad1 = sad2 = sad3 = sad4 = src_sad[iper2 + (jper2)* nSrcBlkX];
+        v1 = v2 = v3 = v4 = src_vector[idx1];
+        sad1 = sad2 = sad3 = sad4 = src_sad[idx1];
       }
       else
       {
-        v1 = v2 = src_vector[iper2 + (jper2)* nSrcBlkX];
-        sad1 = sad2 = src_sad[iper2 + (jper2)* nSrcBlkX];
-        v3 = v4 = src_vector[iper2 + (jper2 + offy) * nSrcBlkX];
-        sad3 = sad4 = src_sad[iper2 + (jper2 + offy) * nSrcBlkX];
+        v1 = v2 = src_vector[idx1];
+        sad1 = sad2 = src_sad[idx1];
+        v3 = v4 = src_vector[idx3];
+        sad3 = sad4 = src_sad[idx3];
       }
     }
     else if ((j == 0) || (j >= 2 * nSrcBlkY - 1))
     {
-      v1 = v2 = src_vector[iper2 + (jper2)* nSrcBlkX];
-      sad1 = sad2 = src_sad[iper2 + (jper2)* nSrcBlkX];
-      v3 = v4 = src_vector[iper2 + offx + (jper2)* nSrcBlkX];
-      sad3 = sad4 = src_sad[iper2 + offx + (jper2)* nSrcBlkX];
+      v1 = v2 = src_vector[idx1];
+      sad1 = sad2 = src_sad[idx1];
+      v3 = v4 = src_vector[idx2];
+      sad3 = sad4 = src_sad[idx2];
     }
     else
     {
-      v1 = src_vector[iper2 + (jper2)* nSrcBlkX];
-      sad1 = src_sad[iper2 + (jper2)* nSrcBlkX];
-      v2 = src_vector[iper2 + offx + (jper2)* nSrcBlkX];
-      sad2 = src_sad[iper2 + offx + (jper2)* nSrcBlkX];
-      v3 = src_vector[iper2 + (jper2 + offy) * nSrcBlkX];
-      sad3 = src_sad[iper2 + (jper2 + offy) * nSrcBlkX];
-      v4 = src_vector[iper2 + offx + (jper2 + offy) * nSrcBlkX];
-      sad4 = src_sad[iper2 + offx + (jper2 + offy) * nSrcBlkX];
+      v1 = src_vector[idx1];
+      sad1 = src_sad[idx1];
+      v2 = src_vector[idx2];
+      sad2 = src_sad[idx2];
+      v3 = src_vector[idx3];
+      sad3 = src_sad[idx3];
+      v4 = src_vector[idx4];
+      sad4 = src_sad[idx4];
     }
 
     int	ax1 = (offx > 0) ? aodd : aeven;
