@@ -2891,7 +2891,7 @@ public:
       plevel,                  // plevel - exponent for lambda scaling on level size  - added by Fizick
       global,                  // use global motion predictor - added by Fizick
       pnew,                    // pnew - cost penalty for new candidate vector - added by Fizick
-      pnew,    // pzero - v1.10.3
+      0,       // pzero - v1.10.3
       0,       // pglobal
       overlap,                 // overlap horizontal
       overlap, // overlap vertical - v1.7
