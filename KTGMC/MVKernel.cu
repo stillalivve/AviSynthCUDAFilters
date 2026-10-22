@@ -1220,6 +1220,9 @@ __global__ void kl_prepare_search(
     data->dataf[3] = penaltyNew;
 
     sad_t lambda = nLambdaLevel * lsad / (lsad + (sad >> 1)) * lsad / (lsad + (sad >> 1));
+    // the first row of the blocks has no predictor above it, the MVTools
+    // search it with the sad alone
+    if (by == 0) lambda = 0;
     data->dataf[4] = lambda;
   }
 }
